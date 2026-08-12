@@ -67,7 +67,7 @@ test('3. 完整日志文件状态机与断句割裂防污染测试', async () =>
 });
 
 test('4. DuckDB 内存聚合与功能查询测试', async () => {
-    const db = new SqlLogDatabase();
+    const db = new SqlLogDatabase(':memory:');
     await db.initSchema();
 
     await db.insertBatch([

@@ -1,14 +1,24 @@
 const duckdb = require('duckdb');
+const path = require('path');
+const fs = require('fs');
 
 class SqlLogDatabase {
-    constructor() {
-        this.db = new duckdb.Database(':memory:');
+    /**
+     * @param {string} dbPath - 数据库路径，缺省为本地文件 'sqllogs.duckdb'，若为 ':memory:' 则为纯内存模式
+     */
+    constructor(dbPath) {
+        this.dbFilePath = dbPath || path.join(__dirname, 'sqllogs.duckdb');
+        
+        // 如果是文件模式且旧文件存在，重建前可选择清理或直接连接
+        this.db = new duckdb.Database(this.dbFilePath);
         this.conn = this.db.connect();
     }
 
     async initSchema() {
         return new Promise((resolve, reject) => {
+            // 先清理旧表以保证重新扫描时数据的干净
             const sql = `
+                DROP TABLE IF EXISTS sqllogs;
                 CREATE TABLE sqllogs (
                     id BIGINT,
                     log_time VARCHAR,
