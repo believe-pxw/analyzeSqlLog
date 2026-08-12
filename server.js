@@ -532,8 +532,12 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 3. Trace 链路 Panel (工具栏零杂乱按钮，纯依靠【时间】与【耗时】表头极简点击排序，大页面高效分页) -->
+        <!-- 3. Trace 链路 Panel (展示单次请求天然时间日志顺序，顶部醒目引导至慢 SQL 排行) -->
         <div id="panel-trace" class="panel">
+            <div style="margin-bottom: 12px; padding: 10px 14px; background: rgba(59, 130, 246, 0.08); border-left: 4px solid var(--accent); border-radius: 4px; font-size: 13px; color: var(--text); display: flex; align-items: center; justify-content: space-between;">
+                <span>💡 <b>Trace 链路</b> 展示单次请求真实日志执行顺序（按时间升序）。如需按耗时寻找慢 SQL，请使用 <a style="color: var(--accent); font-weight: 600; cursor: pointer; text-decoration: underline;" onclick="switchTab('slow')">🐢 慢 SQL 排行</a> 面板。</span>
+                <button class="btn" style="padding: 4px 12px; font-size: 12px;" onclick="switchTab('slow')">去慢 SQL 排行 ➔</button>
+            </div>
             <div class="toolbar">
                 <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData(1)">
                 <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 页中按 SQL 语句/关键词过滤" oninput="sortAndRenderTraceTable()">
@@ -545,8 +549,8 @@ function getDashboardHtml() {
                     <thead>
                         <tr>
                             <th style="width: 50px;">序号</th>
-                            <th style="width: 160px;" class="th-sortable" onclick="sortTraceBy('time')" title="点击切换时间排序 (升序 / 降序)">时间 <span id="sort-icon-time" class="sort-icon">▲</span></th>
-                            <th style="width: 110px;" class="th-sortable" onclick="sortTraceBy('cost')" title="点击切换耗时排序 (降序 / 升序)">耗时 (ms) <span id="sort-icon-cost" class="sort-icon">↕</span></th>
+                            <th style="width: 160px;">时间</th>
+                            <th style="width: 110px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
                             <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
@@ -946,59 +950,21 @@ function getDashboardHtml() {
         }
 
         /**
-         * 表头极简点击排序控制逻辑
-         */
-        function sortTraceBy(field) {
-            if (field === 'time') {
-                if (traceSortMode === 'time-asc') {
-                    traceSortMode = 'time-desc';
-                } else {
-                    traceSortMode = 'time-asc';
-                }
-            } else if (field === 'cost') {
-                if (traceSortMode === 'cost-desc') {
-                    traceSortMode = 'cost-asc';
-                } else {
-                    traceSortMode = 'cost-desc';
-                }
-            }
-            sortAndRenderTraceTable();
-        }
-
-        /**
-         * Trace 链路按表头高亮与数据实时排序
+         * Trace 链路渲染（保持天然日志时间执行顺序）
          */
         function sortAndRenderTraceTable() {
             if (!rawTraceData) return;
             const q = document.getElementById('search-trace-sql').value.toLowerCase();
 
-            let sorted = [...rawTraceData];
-            if (traceSortMode === 'time-asc') {
-                sorted.sort((a, b) => (a._origIndex || 0) - (b._origIndex || 0));
-                document.getElementById('sort-icon-time').innerText = '▲';
-                document.getElementById('sort-icon-cost').innerText = '↕';
-            } else if (traceSortMode === 'time-desc') {
-                sorted.sort((a, b) => (b._origIndex || 0) - (a._origIndex || 0));
-                document.getElementById('sort-icon-time').innerText = '▼';
-                document.getElementById('sort-icon-cost').innerText = '↕';
-            } else if (traceSortMode === 'cost-desc') {
-                sorted.sort((a, b) => (b.exec_time_ms || 0) - (a.exec_time_ms || 0));
-                document.getElementById('sort-icon-time').innerText = '↕';
-                document.getElementById('sort-icon-cost').innerText = '▼';
-            } else if (traceSortMode === 'cost-asc') {
-                sorted.sort((a, b) => (a.exec_time_ms || 0) - (b.exec_time_ms || 0));
-                document.getElementById('sort-icon-time').innerText = '↕';
-                document.getElementById('sort-icon-cost').innerText = '▲';
-            }
-
+            let result = [...rawTraceData];
             if (q) {
-                sorted = sorted.filter(r => 
+                result = result.filter(r => 
                     (r.full_sql || '').toLowerCase().includes(q) || 
                     (r.sql_template || '').toLowerCase().includes(q)
                 );
             }
 
-            renderTraceTable(sorted);
+            renderTraceTable(result);
         }
 
         function renderTraceTable(data) {
