@@ -89,7 +89,7 @@ test('5. parseLogs 只扫描文件名包含 info 或 error 的日志文件测试
 
     const file1 = path.join(tempDir, 'DevNode-server-info.log');
     const file2 = path.join(tempDir, 'DevNode-server-error.log');
-    const file3 = path.join(tempDir, 'DevNode-server-sqltime.log'); // 应该被过滤掉
+    const file3 = path.join(tempDir, 'DevNode-server-sqltime.log');
 
     fs.writeFileSync(file1, '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[1ms]\n>SQL语句:[select 1]', 'utf-8');
     fs.writeFileSync(file2, '2026-08-12 10:00:01.000 ERROR [DevNode] [] [] [] [t-2] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[2ms]\n>SQL语句:[select 2]', 'utf-8');
@@ -97,12 +97,22 @@ test('5. parseLogs 只扫描文件名包含 info 或 error 的日志文件测试
 
     const res = await parseLogs(tempDir, () => {});
 
-    // 应该只扫描了 2 个文件 (info 和 error)，而忽略了 sqltime 文件
     assert.strictEqual(res.totalFiles, 2);
 
-    // 清理测试临时文件与目录
     fs.unlinkSync(file1);
     fs.unlinkSync(file2);
     fs.unlinkSync(file3);
     fs.rmdirSync(tempDir);
+});
+
+test('6. 自动读取 test/fixtures 目录下的真实测试日志文件', async () => {
+    const fixturesDir = path.join(__dirname, 'fixtures');
+    if (fs.existsSync(fixturesDir)) {
+        const records = [];
+        const result = await parseLogs(fixturesDir, (r) => records.push(r));
+        
+        // 校验 test/fixtures 下测试样本解析是否正常
+        assert.strictEqual(result.totalFiles > 0, true);
+        assert.strictEqual(records.length > 0, true);
+    }
 });
