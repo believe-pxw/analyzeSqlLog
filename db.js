@@ -74,24 +74,17 @@ class SqlLogDatabase {
     }
 
     async _doInsertBatch(records) {
+        if (!records || records.length === 0) return;
+        const CHUNK_SIZE = 1000;
         await this.query('BEGIN TRANSACTION');
         try {
-            await new Promise((resolve, reject) => {
-                const stmt = this.conn.prepare(`
-                    INSERT INTO sqllogs (
-                        id, log_time, trace_id, thread_name, exec_time_ms, 
-                        result_rows, db_manager, sql_template, sql_params, full_sql
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
-
-                let pending = records.length;
-                if (pending === 0) {
-                    stmt.finalize();
-                    return resolve();
-                }
-
-                for (const r of records) {
-                    stmt.run(
+            for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+                const chunk = records.slice(i, i + CHUNK_SIZE);
+                const placeholders = [];
+                const params = [];
+                for (const r of chunk) {
+                    placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                    params.push(
                         r.id,
                         r.log_time || '',
                         r.trace_id || '-',
@@ -101,20 +94,12 @@ class SqlLogDatabase {
                         r.db_manager || '',
                         r.sql_template || '',
                         r.sql_params || '',
-                        r.full_sql || '',
-                        (err) => {
-                            if (err) {
-                                stmt.finalize();
-                                return reject(err);
-                            }
-                            pending--;
-                            if (pending === 0) {
-                                stmt.finalize(() => resolve());
-                            }
-                        }
+                        r.full_sql || ''
                     );
                 }
-            });
+                const sql = `INSERT INTO sqllogs VALUES ` + placeholders.join(',');
+                await this.query(sql, params);
+            }
             await this.query('COMMIT');
         } catch (err) {
             try { await this.query('ROLLBACK'); } catch (e) {}

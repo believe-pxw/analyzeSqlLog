@@ -314,3 +314,37 @@ test('16. 独立新增测试：Worker Threads 多核并行文件解析完整校�
     fs.unlinkSync(f2);
     fs.rmdirSync(tempDir);
 });
+
+test('17. 独立新增测试：基于 test/fixtures 真实大日志文件的多核并行解析与 DuckDB Chunk 批量装载性能校验断言测试', async () => {
+    const fixturesDir = path.join(__dirname, 'fixtures');
+    if (!fs.existsSync(fixturesDir)) return;
+
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    const start = Date.now();
+    let batch = [];
+    const BATCH_SIZE = 10000;
+
+    const result = await parseLogs(fixturesDir, async (record) => {
+        batch.push(record);
+        if (batch.length >= BATCH_SIZE) {
+            const toInsert = batch;
+            batch = [];
+            await db.insertBatch(toInsert);
+        }
+    });
+
+    if (batch.length > 0) {
+        await db.insertBatch(batch);
+    }
+
+    const elapsed = Date.now() - start;
+
+    const summary = await db.getTotalSummary();
+    assert.strictEqual(Number(summary.total_sqls), 2749);
+    assert.strictEqual(Number(summary.total_traces), 205);
+    assert.strictEqual(result.totalFiles >= 2, true);
+
+    console.log(`\n    ⚡ test/fixtures 真实 17MB 日志文件全量解析与 DuckDB 装载耗时: ${elapsed} ms`);
+});
