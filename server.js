@@ -86,9 +86,24 @@ function createServer(dbInstance, parseStats, port = 3000) {
 
                 if (pathname === '/api/trace' && method === 'GET') {
                     const traceId = parsedUrl.query.traceId || '';
-                    const rows = await dbInstance.getByTraceId(traceId);
-                    const processedRows = attachBriefSql(rows, 'full_sql');
-                    return res.end(safeJsonStringify({ success: true, data: processedRows }));
+                    const pageStr = parsedUrl.query.page;
+                    const page = pageStr ? (parseInt(pageStr, 10) || 1) : null;
+                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 200;
+
+                    const result = await dbInstance.getByTraceId(traceId, page, pageSize);
+                    if (page === null) {
+                        const processedRows = attachBriefSql(result, 'full_sql');
+                        return res.end(safeJsonStringify({ success: true, data: processedRows }));
+                    } else {
+                        const processedRows = attachBriefSql(result.rows, 'full_sql');
+                        return res.end(safeJsonStringify({
+                            success: true,
+                            data: processedRows,
+                            total: result.total,
+                            page: result.page,
+                            pageSize: result.pageSize
+                        }));
+                    }
                 }
 
                 if (pathname === '/api/diagnostics' && method === 'GET') {
@@ -517,12 +532,12 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 3. Trace 链路 Panel (工具栏零杂乱按钮，纯依靠【时间】与【耗时】表头极简点击排序) -->
+        <!-- 3. Trace 链路 Panel (工具栏零杂乱按钮，纯依靠【时间】与【耗时】表头极简点击排序，大页面高效分页) -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
-                <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="sortAndRenderTraceTable()">
-                <button class="btn" onclick="loadTraceData()">搜索 Trace 链路</button>
+                <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData(1)">
+                <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 页中按 SQL 语句/关键词过滤" oninput="sortAndRenderTraceTable()">
+                <button class="btn" onclick="loadTraceData(1)">搜索 Trace 链路</button>
             </div>
             <div id="trace-summary" style="margin-bottom: 8px; font-size: 13px; color: var(--accent); font-weight: 600;"></div>
             <div class="table-container">
@@ -538,6 +553,23 @@ function getDashboardHtml() {
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
                 </table>
+            </div>
+            <div class="pagination-bar" id="trace-pagination-bar" style="display: none; margin-top: 12px;">
+                <div>
+                    <span>每页显示：</span>
+                    <select id="trace-pagesize" onchange="changeTracePageSize()">
+                        <option value="50">50 条/页</option>
+                        <option value="100">100 条/页</option>
+                        <option value="200" selected>200 条/页 (推荐大页面)</option>
+                        <option value="500">500 条/页</option>
+                        <option value="1000">1000 条/页</option>
+                    </select>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button class="btn" id="btn-trace-prev" onclick="prevTracePage()">◀ 上一页</button>
+                    <span id="trace-page-info" style="font-size: 13px; font-weight: 600;">第 1 / 1 页</span>
+                    <button class="btn" id="btn-trace-next" onclick="nextTracePage()">下一页 ▶</button>
+                </div>
             </div>
         </div>
 
@@ -857,16 +889,60 @@ function getDashboardHtml() {
             if (cb) cb(1, parseInt(newSize, 10));
         }
 
-        async function loadTraceData() {
+        let curTracePage = 1;
+        let curTracePageSize = 200;
+        let totalTraceCount = 0;
+
+        async function loadTraceData(page = 1) {
             const traceId = document.getElementById('trace-input').value.trim();
             if (!traceId) return;
-            const res = await fetch('/api/trace?traceId=' + encodeURIComponent(traceId));
+
+            curTracePage = page;
+            const pageSizeSelect = document.getElementById('trace-pagesize');
+            if (pageSizeSelect) curTracePageSize = parseInt(pageSizeSelect.value, 10) || 200;
+
+            const res = await fetch(\`/api/trace?traceId=\${encodeURIComponent(traceId)}&page=\${curTracePage}&pageSize=\${curTracePageSize}\`);
             const json = await res.json();
             if (json.success) {
-                // 标记原始从后端加载的天然日志时间下标 _origIndex
-                rawTraceData = (json.data || []).map((item, idx) => ({ ...item, _origIndex: idx }));
+                totalTraceCount = json.total || 0;
+                const pageOffset = (curTracePage - 1) * curTracePageSize;
+                rawTraceData = (json.data || []).map((item, idx) => ({ ...item, _origIndex: pageOffset + idx }));
                 sortAndRenderTraceTable();
+                updateTracePaginationUI();
             }
+        }
+
+        function changeTracePageSize() {
+            const pageSizeSelect = document.getElementById('trace-pagesize');
+            if (pageSizeSelect) curTracePageSize = parseInt(pageSizeSelect.value, 10) || 200;
+            loadTraceData(1);
+        }
+
+        function prevTracePage() {
+            if (curTracePage > 1) {
+                loadTraceData(curTracePage - 1);
+            }
+        }
+
+        function nextTracePage() {
+            const maxPage = Math.ceil(totalTraceCount / curTracePageSize) || 1;
+            if (curTracePage < maxPage) {
+                loadTraceData(curTracePage + 1);
+            }
+        }
+
+        function updateTracePaginationUI() {
+            const pBar = document.getElementById('trace-pagination-bar');
+            if (!pBar) return;
+            if (totalTraceCount === 0) {
+                pBar.style.display = 'none';
+                return;
+            }
+            pBar.style.display = 'flex';
+            const maxPage = Math.ceil(totalTraceCount / curTracePageSize) || 1;
+            document.getElementById('trace-page-info').innerText = \`第 \${curTracePage} / \${maxPage} 页 (共 \${totalTraceCount.toLocaleString()} 条)\`;
+            document.getElementById('btn-trace-prev').disabled = (curTracePage <= 1);
+            document.getElementById('btn-trace-next').disabled = (curTracePage >= maxPage);
         }
 
         /**
@@ -933,19 +1009,22 @@ function getDashboardHtml() {
             if (data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">未查找到符合条件的 SQL 记录</td></tr>';
                 summary.innerText = '';
+                updateTracePaginationUI();
                 return;
             }
 
+            const pageOffset = (curTracePage - 1) * curTracePageSize;
             const totalCost = rawTraceData.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
-            summary.innerText = \`Trace [ \${traceId} ] 共查到 \${rawTraceData.length} 条 SQL 记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms (当前显示 \${data.length} 条)\`;
+            summary.innerText = \`Trace [ \${traceId} ] 共查到 \${totalTraceCount.toLocaleString()} 条 SQL 记录 (第 \${curTracePage} 页，当前页显示 \${data.length} 条)\`;
 
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
                 const briefSql = r.brief_sql || fullSql;
+                const globalIdx = (r._origIndex !== undefined) ? (r._origIndex + 1) : (pageOffset + i + 1);
 
                 return \`
                 <tr>
-                    <td>\${i + 1}</td>
+                    <td>\${globalIdx}</td>
                     <td>\${r.log_time}</td>
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
@@ -960,7 +1039,7 @@ function getDashboardHtml() {
         function jumpToTrace(traceId) {
             document.getElementById('trace-input').value = traceId;
             switchTab('trace');
-            loadTraceData();
+            loadTraceData(1);
         }
 
         async function loadDiagnostics() {

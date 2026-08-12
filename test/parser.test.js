@@ -348,3 +348,43 @@ test('17. 独立新增测试：基于 test/fixtures 真实大日志文件的多�
 
     console.log(`\n    ⚡ test/fixtures 真实 17MB 日志文件全量解析与 DuckDB 装载耗时: ${elapsed} ms`);
 });
+
+test('18. 独立新增测试：Trace 链路后端大页面分页与单接口向下兼容断言测试', async () => {
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    const sampleRecords = [];
+    for (let i = 1; i <= 350; i++) {
+        sampleRecords.push({
+            id: i,
+            log_time: `2026-08-12 10:00:${String(i % 60).padStart(2, '0')}.000`,
+            trace_id: 't-page-test',
+            thread_name: 'th-1',
+            exec_time_ms: i * 2,
+            result_rows: 1,
+            db_manager: 'mysql',
+            sql_template: `SELECT * FROM table_${i}`,
+            sql_params: '',
+            full_sql: `SELECT * FROM table_${i}`
+        });
+    }
+    await db.insertBatch(sampleRecords);
+
+    // 默认大页面 200 条/页
+    const p1 = await db.getByTraceId('t-page-test', 1, 200);
+    assert.strictEqual(p1.total, 350);
+    assert.strictEqual(p1.rows.length, 200);
+    assert.strictEqual(p1.page, 1);
+    assert.strictEqual(p1.pageSize, 200);
+
+    // 第 2 页 150 条
+    const p2 = await db.getByTraceId('t-page-test', 2, 200);
+    assert.strictEqual(p2.total, 350);
+    assert.strictEqual(p2.rows.length, 150);
+    assert.strictEqual(p2.page, 2);
+
+    // 不传 page 参数，返回全量数组 (保持旧接口兼容)
+    const allRows = await db.getByTraceId('t-page-test');
+    assert.strictEqual(Array.isArray(allRows), true);
+    assert.strictEqual(allRows.length, 350);
+});

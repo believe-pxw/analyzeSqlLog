@@ -197,17 +197,38 @@ class SqlLogDatabase {
     }
 
     /**
-     * 🔗 按 TraceID 获取该动作下的全量 SQL 按时间顺序排列
+     * 🔗 按 TraceID 获取该动作下的全量 SQL 按时间顺序排列 (支持后端分页，默认大页面)
      */
-    async getByTraceId(traceId) {
-        if (!traceId) return [];
-        const sql = `
+    async getByTraceId(traceId, page = null, pageSize = 200) {
+        if (!traceId) return page !== null ? { rows: [], total: 0, page: 1, pageSize } : [];
+
+        const whereClause = 'WHERE trace_id = ?';
+        const params = [traceId];
+
+        if (page === null) {
+            const sql = `
+                SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
+                FROM sqllogs
+                ${whereClause}
+                ORDER BY id ASC
+            `;
+            return await this.query(sql, params);
+        }
+
+        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
+        const countRows = await this.query(countSql, params);
+        const total = countRows[0] ? Number(countRows[0].total) : 0;
+
+        const offset = (page - 1) * pageSize;
+        const dataSql = `
             SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
             FROM sqllogs
-            WHERE trace_id = ?
+            ${whereClause}
             ORDER BY id ASC
+            LIMIT ? OFFSET ?
         `;
-        return await this.query(sql, [traceId]);
+        const rows = await this.query(dataSql, [...params, pageSize, offset]);
+        return { rows, total, page, pageSize };
     }
 
     /**
