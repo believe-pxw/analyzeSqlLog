@@ -218,7 +218,7 @@ async function parseLogFile(filePath, onRecord) {
 }
 
 /**
- * 遍历扫描指定目录/文件列表
+ * 遍历扫描指定目录/文件列表 (专一只扫描 info 和 error 文件)
  */
 async function parseLogs(targetPath, onRecord) {
     let files = [];
@@ -226,7 +226,9 @@ async function parseLogs(targetPath, onRecord) {
     if (stat.isDirectory()) {
         const fileNames = fs.readdirSync(targetPath);
         for (const f of fileNames) {
-            if (f.endsWith('.log') || f.endsWith('.txt')) {
+            // 严格要求：只扫描包含 info 或 error 的日志文件 (忽略大小写，例如 DevNode-server-info.log, DevNode-server-error.log)
+            const isInfoOrError = /info|error/i.test(f);
+            if ((f.endsWith('.log') || f.endsWith('.txt')) && isInfoOrError) {
                 files.push(path.join(targetPath, f));
             }
         }

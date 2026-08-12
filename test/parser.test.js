@@ -2,7 +2,7 @@ const assert = require('node:assert');
 const { test } = require('node:test');
 const fs = require('fs');
 const path = require('path');
-const { parseLogFile, parseTimeToMs, cleanSqlText } = require('../parser');
+const { parseLogs, parseLogFile, parseTimeToMs, cleanSqlText } = require('../parser');
 const SqlLogDatabase = require('../db');
 
 test('1. parseTimeToMs 耗时转换测试', () => {
@@ -69,19 +69,40 @@ test('4. DuckDB 内存聚合与后端分页测试', async () => {
         { id: 4, log_time: '2026-08-12 10:00:03.000', trace_id: '-', thread_name: 'th-3', exec_time_ms: 5, result_rows: 1, db_manager: 'mysql', sql_template: 'update `SYS_Lock` set Slock=1 where UniqueKey=?', sql_params: '#0:a', full_sql: 'update `SYS_Lock` set Slock=1' }
     ]);
 
-    // 分页查询第一页 (pageSize=2)
     const page1 = await db.getTopRepeated(1, 2, '', false);
     assert.strictEqual(page1.total, 3);
     assert.strictEqual(page1.rows.length, 2);
     assert.strictEqual(Number(page1.rows[0].count), 2);
 
-    // 分页查询第二页 (pageSize=2)
     const page2 = await db.getTopRepeated(2, 2, '', false);
     assert.strictEqual(page2.total, 3);
     assert.strictEqual(page2.rows.length, 1);
 
-    // 慢 SQL 分页查询
     const slowPage1 = await db.getTopSlow(1, 2, '', false);
     assert.strictEqual(slowPage1.total, 4);
     assert.strictEqual(slowPage1.rows[0].exec_time_ms, 100);
+});
+
+test('5. parseLogs 只扫描文件名包含 info 或 error 的日志文件测试', async () => {
+    const tempDir = path.join(__dirname, 'test_logs_dir');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+
+    const file1 = path.join(tempDir, 'DevNode-server-info.log');
+    const file2 = path.join(tempDir, 'DevNode-server-error.log');
+    const file3 = path.join(tempDir, 'DevNode-server-sqltime.log'); // 应该被过滤掉
+
+    fs.writeFileSync(file1, '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[1ms]\n>SQL语句:[select 1]', 'utf-8');
+    fs.writeFileSync(file2, '2026-08-12 10:00:01.000 ERROR [DevNode] [] [] [] [t-2] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[2ms]\n>SQL语句:[select 2]', 'utf-8');
+    fs.writeFileSync(file3, '2026-08-12 10:00:02.000 INFO [DevNode] [] [] [] [t-3] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[3ms]\n>SQL语句:[select 3]', 'utf-8');
+
+    const res = await parseLogs(tempDir, () => {});
+
+    // 应该只扫描了 2 个文件 (info 和 error)，而忽略了 sqltime 文件
+    assert.strictEqual(res.totalFiles, 2);
+
+    // 清理测试临时文件与目录
+    fs.unlinkSync(file1);
+    fs.unlinkSync(file2);
+    fs.unlinkSync(file3);
+    fs.rmdirSync(tempDir);
 });
