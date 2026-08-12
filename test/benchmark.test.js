@@ -37,8 +37,8 @@ test('🚀 性能基准测试 1：10 万条结构化 SQL 记录 DuckDB Multi-row
     const throughput = Math.round((TOTAL_RECORDS / elapsed) * 1000);
     console.log(`\n    ⚡ DuckDB 内存装载基准: 插入 ${TOTAL_RECORDS.toLocaleString()} 条记录耗时: ${elapsed} ms (吞吐率: ${throughput.toLocaleString()} 条/秒)`);
 
-    // 性能基线断言：10 万条记录插入耗时必须在 12 秒内
-    assert.strictEqual(elapsed < 12000, true, `10 万条 SQL 插入耗时 (${elapsed}ms) 超过 12 秒基线`);
+    // 性能极速基线断言：10 万条记录插入耗时必须在 1500 ms (1.5秒) 内
+    assert.strictEqual(elapsed < 1500, true, `10 万条 SQL 插入耗时 (${elapsed}ms) 超过 1500ms 基线`);
 });
 
 test('🚀 性能基准测试 2：10 万条在库 SQL 数据的 DuckDB GROUP BY 高维内存聚合与 Top-N 查询耗时断言', async () => {

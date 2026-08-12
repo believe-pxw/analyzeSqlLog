@@ -1,6 +1,7 @@
 const duckdb = require('duckdb');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 class SqlLogDatabase {
     /**
@@ -23,6 +24,29 @@ class SqlLogDatabase {
     }
 
     /**
+     * 初始化表结构与性能索引
+     */
+    async initSchema() {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS sqllogs (
+                id BIGINT PRIMARY KEY,
+                log_time VARCHAR,
+                trace_id VARCHAR,
+                thread_name VARCHAR,
+                exec_time_ms DOUBLE,
+                result_rows INT,
+                db_manager VARCHAR,
+                sql_template VARCHAR,
+                sql_params VARCHAR,
+                full_sql VARCHAR
+            );
+            CREATE INDEX IF NOT EXISTS idx_trace_id ON sqllogs(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_exec_time ON sqllogs(exec_time_ms DESC);
+        `;
+        return this.query(sql);
+    }
+
+    /**
      * 包装 DuckDB 的 async query
      */
     query(sql, params = []) {
@@ -35,28 +59,7 @@ class SqlLogDatabase {
     }
 
     /**
-     * 初始化内存 SQL 数据库表结构
-     */
-    async initSchema() {
-        const createTableSql = `
-            CREATE TABLE IF NOT EXISTS sqllogs (
-                id INTEGER,
-                log_time VARCHAR,
-                trace_id VARCHAR,
-                thread_name VARCHAR,
-                exec_time_ms DOUBLE,
-                result_rows INTEGER,
-                db_manager VARCHAR,
-                sql_template VARCHAR,
-                sql_params VARCHAR,
-                full_sql VARCHAR
-            );
-        `;
-        await this.query(createTableSql);
-    }
-
-    /**
-     * 批量高效插入 SQL 记录 (支持多 Worker 消息串行队列防护)
+     * 🚀 串行批量插入，彻底规避 TransactionContext 冲突并利用 DuckDB C++ SIMD 向量化载入
      */
     async insertBatch(records) {
         if (!records || records.length === 0) return;
@@ -75,35 +78,38 @@ class SqlLogDatabase {
 
     async _doInsertBatch(records) {
         if (!records || records.length === 0) return;
-        const CHUNK_SIZE = 2000;
-        await this.query('BEGIN TRANSACTION');
+
+        // 🚀 向量化极速 JSON 直载引擎：彻底规避 10 万次 V8 C++ 参数绑定与 AST 语法树解析开销
+        const tmpPath = path.join(os.tmpdir(), `sqllog_batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.json`);
         try {
-            for (let i = 0; i < records.length; i += CHUNK_SIZE) {
-                const chunk = records.slice(i, i + CHUNK_SIZE);
-                const placeholders = [];
-                const params = [];
-                for (const r of chunk) {
-                    placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                    params.push(
-                        r.id,
-                        r.log_time || '',
-                        r.trace_id || '-',
-                        r.thread_name || '-',
-                        r.exec_time_ms || 0,
-                        r.result_rows || 0,
-                        r.db_manager || '',
-                        r.sql_template || '',
-                        r.sql_params || '',
-                        r.full_sql || ''
-                    );
-                }
-                const sql = `INSERT INTO sqllogs VALUES ` + placeholders.join(',');
-                await this.query(sql, params);
+            const normalized = records.map(r => ({
+                id: r.id,
+                log_time: r.log_time || '',
+                trace_id: r.trace_id || '-',
+                thread_name: r.thread_name || '-',
+                exec_time_ms: r.exec_time_ms || 0,
+                result_rows: r.result_rows || 0,
+                db_manager: r.db_manager || '',
+                sql_template: r.sql_template || '',
+                sql_params: r.sql_params || '',
+                full_sql: r.full_sql || ''
+            }));
+            fs.writeFileSync(tmpPath, JSON.stringify(normalized));
+
+            await this.query(`
+                INSERT INTO sqllogs (
+                    id, log_time, trace_id, thread_name, exec_time_ms,
+                    result_rows, db_manager, sql_template, sql_params, full_sql
+                )
+                SELECT 
+                    id, log_time, trace_id, thread_name, exec_time_ms,
+                    result_rows, db_manager, sql_template, sql_params, full_sql
+                FROM read_json_auto('${tmpPath.replace(/\\/g, '/')}')
+            `);
+        } finally {
+            if (fs.existsSync(tmpPath)) {
+                try { fs.unlinkSync(tmpPath); } catch (e) {}
             }
-            await this.query('COMMIT');
-        } catch (err) {
-            try { await this.query('ROLLBACK'); } catch (e) {}
-            throw err;
         }
     }
 
