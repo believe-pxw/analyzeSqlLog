@@ -19,12 +19,12 @@ function compressSqlColumns(sql) {
     const fromIdx = lower.indexOf('from');
 
     if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-        const selectHead = str.substring(0, selectIdx + 6);
+        const selectPart = str.substring(0, selectIdx + 6);
         const cols = str.substring(selectIdx + 6, fromIdx);
         const fromTail = str.substring(fromIdx);
 
         if (cols.includes(',') || cols.trim().length > 15) {
-            return selectHead + ' ... ' + fromTail.trim();
+            return selectPart + ' ... ' + fromTail.trim();
         }
     }
     return str;
@@ -286,61 +286,33 @@ function getDashboardHtml() {
         th { background: #f8fafc; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
         tr:hover { background: #f1f5f9; }
 
-        .sql-box-wrapper {
-            position: relative;
-        }
-
         .sql-code {
             font-family: "Fira Code", Consolas, Monaco, monospace;
             background: #f8fafc;
-            padding: 4px 8px;
+            padding: 6px 10px;
             border-radius: 4px;
             color: #1e293b;
             white-space: pre-wrap;
             word-break: break-all;
-            max-height: 100px;
+            max-height: 110px;
             overflow-y: auto;
-            border: 1px solid #e2e8f0;
+            border: 1px solid #cbd5e1;
             font-size: 12px;
             line-height: 1.35;
-        }
-
-        .sql-toggle-btn {
-            background: #0284c7;
-            color: #ffffff;
-            border: none;
-            padding: 1px 6px;
-            border-radius: 3px;
             cursor: pointer;
-            font-size: 11px;
-            font-weight: 600;
-            margin-bottom: 3px;
-            display: inline-flex;
-            align-items: center;
-            gap: 2px;
+            transition: border-color 0.15s, background 0.15s;
+            user-select: text;
         }
-        .sql-toggle-btn:hover { background: #0369a1; }
-        .sql-toggle-btn.expanded { background: #64748b; }
+        .sql-code:hover {
+            border-color: #0284c7;
+            background: #f0f9ff;
+        }
 
         .trace-link { color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer; }
         .trace-link:hover { text-decoration: underline; }
 
         .tag-slow { color: var(--accent-red); font-weight: 700; }
         .tag-freq { color: var(--accent-yellow); font-weight: 700; }
-
-        .copy-btn {
-            background: #f1f5f9;
-            border: 1px solid #cbd5e1;
-            color: #475569;
-            padding: 1px 6px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 11px;
-            margin-top: 3px;
-            display: inline-block;
-            font-weight: 500;
-        }
-        .copy-btn:hover { color: #0f172a; background: #cbd5e1; }
 
         /* 分页条 Pagination Bar */
         .pagination-bar {
@@ -384,9 +356,34 @@ function getDashboardHtml() {
             font-size: 12.5px;
             line-height: 1.4;
         }
+
+        /* 浮动 Toast 复制提示 */
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0284c7;
+            color: #ffffff;
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(4px);
+        }
     </style>
 </head>
 <body>
+    <div class="toast" id="toast">已展开并自动选中复制完整 SQL！</div>
+
     <div class="container">
         <header>
             <div class="title">
@@ -424,7 +421,7 @@ function getDashboardHtml() {
                             <th style="width: 130px;">同一事务内循环次数</th>
                             <th style="width: 110px;">事务内浪费耗时</th>
                             <th style="width: 160px;">诊断重构建议</th>
-                            <th>在 For 循环体中反复执行的 SQL 模板</th>
+                            <th>点击框体展开全选并复制 SQL 模板 (默认列名缩略)</th>
                         </tr>
                     </thead>
                     <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -451,7 +448,7 @@ function getDashboardHtml() {
                             <th style="width: 180px;">TraceID</th>
                             <th style="width: 150px;">时间</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>完整执行 SQL</th>
+                            <th>点击框体展开全选并复制完整 SQL (默认列名缩略)</th>
                         </tr>
                     </thead>
                     <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
@@ -476,7 +473,7 @@ function getDashboardHtml() {
                             <th style="width: 150px;">时间</th>
                             <th style="width: 90px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>执行 SQL 语句</th>
+                            <th>点击框体展开全选并复制 SQL (默认列名缩略)</th>
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
@@ -504,7 +501,7 @@ function getDashboardHtml() {
                             <th style="width: 90px;">平均耗时</th>
                             <th style="width: 90px;">最大耗时</th>
                             <th style="width: 80px;">Trace 数</th>
-                            <th>SQL 参数化模板</th>
+                            <th>点击框体展开全选并复制 SQL 模板 (默认列名缩略)</th>
                         </tr>
                     </thead>
                     <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -586,13 +583,49 @@ function getDashboardHtml() {
             if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
                 const selectHead = str.substring(0, selectIdx + 6);
                 const cols = str.substring(selectIdx + 6, fromIdx);
-                const fromTail = str.substring(fromIdx);
+                const fromPart = str.substring(fromIdx);
 
                 if (cols.includes(',') || cols.trim().length > 15) {
-                    return selectHead + ' ... ' + fromTail.trim();
+                    return selectHead + ' ... ' + fromPart.trim();
                 }
             }
             return str;
+        }
+
+        /**
+         * 极简点击交互：点击 SQL 文本框，自动展开完整列名、自动全选，并写入剪贴板
+         */
+        function handleSqlClick(div) {
+            const fullSql = div.getAttribute('data-full');
+            if (!fullSql) return;
+
+            // 切换为完整 SQL
+            div.innerHTML = escapeHtml(fullSql);
+
+            // 自动选中文本框内部节点内容
+            const range = document.createRange();
+            range.selectNodeContents(div);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            // 写入剪贴板并给出 Toast 浮动提示
+            navigator.clipboard.writeText(fullSql).then(() => {
+                showToast('✨ 已展开并自动全选复制完整 SQL！');
+            }).catch(() => {
+                showToast('✨ 已展开并选中 SQL！');
+            });
+        }
+
+        let toastTimer = null;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2200);
         }
 
         async function loadRepeated(page = 1) {
@@ -623,8 +656,6 @@ function getDashboardHtml() {
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.sql_template || '';
                 const briefSql = compressSqlColumns(fullSql);
-                const hasAbbr = briefSql !== fullSql;
-                const elementId = 'rep-sql-' + (offset + i);
 
                 return \`
                 <tr>
@@ -635,11 +666,7 @@ function getDashboardHtml() {
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        <div class="sql-box-wrapper">
-                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
-                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制 SQL 模板</button>
-                        </div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -680,8 +707,6 @@ function getDashboardHtml() {
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
                 const briefSql = compressSqlColumns(fullSql);
-                const hasAbbr = briefSql !== fullSql;
-                const elementId = 'slow-sql-' + (offset + i);
 
                 return \`
                 <tr>
@@ -691,11 +716,7 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-box-wrapper">
-                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
-                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制完整 SQL</button>
-                        </div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -710,23 +731,6 @@ function getDashboardHtml() {
                 (d.trace_id || '').toLowerCase().includes(q)
             );
             renderSlowTable(filtered);
-        }
-
-        function toggleSql(id) {
-            const div = document.getElementById(id);
-            const btn = document.getElementById('btn-' + id);
-            const full = div.getAttribute('data-full');
-            const brief = div.getAttribute('data-brief');
-
-            if (btn.classList.contains('expanded')) {
-                div.innerHTML = escapeHtml(brief);
-                btn.innerText = '🔍 展开完整列名';
-                btn.classList.remove('expanded');
-            } else {
-                div.innerHTML = escapeHtml(full);
-                btn.innerText = '⬆️ 收起列名';
-                btn.classList.add('expanded');
-            }
         }
 
         function renderPagination(containerId, page, pageSize, total, onPageChange) {
@@ -792,8 +796,6 @@ function getDashboardHtml() {
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
                 const briefSql = compressSqlColumns(fullSql);
-                const hasAbbr = briefSql !== fullSql;
-                const elementId = 'trace-sql-' + i;
 
                 return \`
                 <tr>
@@ -802,11 +804,7 @@ function getDashboardHtml() {
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-box-wrapper">
-                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
-                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
-                        </div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -854,8 +852,6 @@ function getDashboardHtml() {
                 const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
                 const fullSql = r.sql_template || '';
                 const briefSql = compressSqlColumns(fullSql);
-                const hasAbbr = briefSql !== fullSql;
-                const elementId = 'diag-sql-' + i;
 
                 return \`
                 <tr>
@@ -866,11 +862,7 @@ function getDashboardHtml() {
                     <td>\${r.total_time_ms} ms</td>
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
-                        <div class="sql-box-wrapper">
-                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
-                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
-                        </div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -896,11 +888,6 @@ function getDashboardHtml() {
         function escapeJs(str) {
             if (!str) return '';
             return JSON.stringify(str).slice(1, -1);
-        }
-
-        function copyText(text) {
-            navigator.clipboard.writeText(text);
-            alert('SQL 已成功复制到剪贴板！');
         }
 
         window.onload = init;
