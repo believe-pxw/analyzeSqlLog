@@ -221,7 +221,7 @@ async function parseLogFile(filePath, onRecord) {
 }
 
 /**
- * 遍历扫描指定目录/文件列表 (支持递归深度遍历所有 .log 与 .txt 日志文件)
+ * 遍历扫描指定目录/文件列表 (递归深度扫描文件名包含 server-info 或 server-error 的日志文件)
  */
 async function parseLogs(targetPath, onRecord) {
     let files = [];
@@ -236,8 +236,9 @@ async function parseLogs(targetPath, onRecord) {
                 if (entry.isDirectory()) {
                     collectFiles(fullPath);
                 } else if (entry.isFile()) {
-                    const ext = path.extname(entry.name).toLowerCase();
-                    if (ext === '.log' || ext === '.txt') {
+                    const f = entry.name;
+                    const isServerInfoOrError = /server-info|server-error/i.test(f);
+                    if ((f.endsWith('.log') || f.endsWith('.txt')) && isServerInfoOrError) {
                         files.push(fullPath);
                     }
                 }
