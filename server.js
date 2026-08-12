@@ -7,6 +7,27 @@ function safeJsonStringify(obj) {
     );
 }
 
+/**
+ * 强健的列名精简算法：查找 SELECT 与 FROM，将冗长的列名区间替换为 select ... from
+ */
+function compressSqlColumns(sql) {
+    if (!sql) return '';
+    const str = sql.trim();
+    const selectIdx = str.search(/select/i);
+    const fromIdx = str.search(/\sfrom\s/i);
+
+    if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
+        const selectPart = str.substring(0, selectIdx + 6);
+        const cols = str.substring(selectIdx + 6, fromIdx);
+        const fromPart = str.substring(fromIdx);
+
+        if (cols.includes(',') || cols.trim().length > 25) {
+            return selectPart + ' ...' + fromPart;
+        }
+    }
+    return str;
+}
+
 function createServer(dbInstance, parseStats, port = 3000) {
     const server = http.createServer(async (req, res) => {
         const parsedUrl = url.parse(req.url, true);
@@ -278,6 +299,10 @@ function getDashboardHtml() {
         th { background: #f8fafc; color: var(--text-muted); font-weight: 600; }
         tr:hover { background: #f1f5f9; }
 
+        .sql-box-wrapper {
+            position: relative;
+        }
+
         .sql-code {
             font-family: "Fira Code", Consolas, Monaco, monospace;
             background: #f1f5f9;
@@ -292,17 +317,22 @@ function getDashboardHtml() {
         }
 
         .sql-toggle-btn {
-            background: #e0f2fe;
-            color: #0284c7;
-            border: 1px solid #bae6fd;
-            padding: 2px 8px;
+            background: #0284c7;
+            color: #ffffff;
+            border: none;
+            padding: 3px 9px;
             border-radius: 4px;
             cursor: pointer;
             font-size: 12px;
             font-weight: 600;
-            margin-right: 6px;
+            margin-bottom: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: background 0.2s;
         }
-        .sql-toggle-btn:hover { background: #bae6fd; }
+        .sql-toggle-btn:hover { background: #0369a1; }
+        .sql-toggle-btn.expanded { background: #64748b; }
 
         .trace-link { color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer; }
         .trace-link:hover { text-decoration: underline; }
@@ -560,22 +590,24 @@ function getDashboardHtml() {
         }
 
         /**
-         * 智能精简列名：若带有大量 select col1, col2, ... 则精简为 select ... from
+         * 强健的列名精简算法：查找 SELECT 与 FROM，将冗长的列名区间替换为 select ... from
          */
         function compressSqlColumns(sql) {
             if (!sql) return '';
-            // 匹配 select xxx from 模式
-            const match = sql.match(/^(select\s+)([\s\S]+?)(\s+from\s+[\s\S]+)$/i);
-            if (match) {
-                const selectHead = match[1];
-                const cols = match[2];
-                const tail = match[3];
-                // 如果列定义包含 3 个以上的逗号或长度 > 40
-                if ((cols.match(/,/g) || []).length >= 3 || cols.length > 40) {
-                    return selectHead + '... ' + tail;
+            const str = sql.trim();
+            const selectIdx = str.search(/select/i);
+            const fromIdx = str.search(/\sfrom\s/i);
+
+            if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
+                const selectPart = str.substring(0, selectIdx + 6);
+                const cols = str.substring(selectIdx + 6, fromIdx);
+                const fromPart = str.substring(fromIdx);
+
+                if (cols.includes(',') || cols.trim().length > 25) {
+                    return selectPart + ' ...' + fromPart;
                 }
             }
-            return sql;
+            return str;
         }
 
         async function loadRepeated(page = 1) {
@@ -618,9 +650,11 @@ function getDashboardHtml() {
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
-                        <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制 SQL 模板</button>
+                        <div class="sql-box-wrapper">
+                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
+                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制 SQL 模板</button>
+                        </div>
                     </td>
                 </tr>
             \`;
@@ -672,9 +706,11 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
-                        <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制完整 SQL</button>
+                        <div class="sql-box-wrapper">
+                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
+                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制完整 SQL</button>
+                        </div>
                     </td>
                 </tr>
             \`;
@@ -697,12 +733,14 @@ function getDashboardHtml() {
             const full = div.getAttribute('data-full');
             const brief = div.getAttribute('data-brief');
 
-            if (btn.innerText === '展开完整列名') {
-                div.innerHTML = escapeHtml(full);
-                btn.innerText = '收起列名';
-            } else {
+            if (btn.classList.contains('expanded')) {
                 div.innerHTML = escapeHtml(brief);
-                btn.innerText = '展开完整列名';
+                btn.innerText = '🔍 展开完整列名';
+                btn.classList.remove('expanded');
+            } else {
+                div.innerHTML = escapeHtml(full);
+                btn.innerText = '⬆️ 收起列名';
+                btn.classList.add('expanded');
             }
         }
 
@@ -773,9 +811,11 @@ function getDashboardHtml() {
                         <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                         <td>\${r.result_rows}</td>
                         <td>
-                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
-                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
+                            <div class="sql-box-wrapper">
+                                \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
+                                <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                                <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
+                            </div>
                         </td>
                     </tr>
                 \`;
@@ -866,4 +906,4 @@ function getDashboardHtml() {
 </html>`;
 }
 
-module.exports = { createServer };
+module.exports = { createServer, compressSqlColumns };

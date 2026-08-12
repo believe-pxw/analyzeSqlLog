@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseLogs, parseLogFile, parseTimeToMs, cleanSqlText } = require('../parser');
 const SqlLogDatabase = require('../db');
+const { compressSqlColumns } = require('../server');
 
 test('1. parseTimeToMs 耗时转换测试', () => {
     assert.strictEqual(parseTimeToMs('0ms'), 0);
@@ -131,23 +132,25 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     const topRepeated = await db.getTopRepeated(1, 10, '', false);
     const topSlow = await db.getTopSlow(1, 10, '', false);
 
-    // 1. 验证分析提取到的 SQL 结构化总记录数 (2749 条)
     assert.strictEqual(Number(summary.total_sqls), 2749);
-
-    // 2. 验证提取到的独立 Trace 动作总数 (205 个)
     assert.strictEqual(Number(summary.total_traces), 205);
-
-    // 3. 验证全局最大慢 SQL 执行耗时为 100 ms
     assert.strictEqual(summary.max_exec_time_ms, 100);
 
-    // 4. 验证频次最高 Top 1 的 SQL 模板及其执行次数 (540 次)
     assert.strictEqual(topRepeated.rows[0].sql_template, 'update `SYS_Lock` set Slock=1 where UniqueKey=?');
     assert.strictEqual(Number(topRepeated.rows[0].count), 540);
 
-    // 5. 验证业务查询频次 Top 2 的 SQL 模板及其执行次数 (133 次)
     assert.strictEqual(topRepeated.rows[1].sql_template, 'SELECT Role FROM SYS_OperatorRole Where SOID= ?');
     assert.strictEqual(Number(topRepeated.rows[1].count), 133);
 
-    // 6. 验证最高慢 SQL 的详情 (100 ms 慢 SQL 对应特定的 TraceID 和相关记录)
     assert.strictEqual(topSlow.rows[0].exec_time_ms, 100);
+});
+
+test('8. compressSqlColumns SQL多列名精简压缩算法测试', () => {
+    const longSql = 'select OID, VerID, GroupID, CompanyCodeID, FiscalYearPeriod, Money_Debit, Money_Credit from EFI_VoucherNBalance_INCR order by GroupId';
+    const compressed = compressSqlColumns(longSql);
+
+    assert.strictEqual(compressed, 'select ... from EFI_VoucherNBalance_INCR order by GroupId');
+
+    const shortSql = 'SELECT Role FROM SYS_OperatorRole Where SOID= ?';
+    assert.strictEqual(compressSqlColumns(shortSql), shortSql);
 });
