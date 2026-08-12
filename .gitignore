@@ -3,3 +3,7 @@ node_modules/
 *.log
 *.duckdb
 *.duckdb.wal
+
+# 忽略测试所用的大体积真实日志文件
+test/fixtures/*
+!test/fixtures/.gitkeep

@@ -7,6 +7,12 @@
     "sqllog": "./index.js",
     "sqlanalyzer": "./index.js"
   },
+  "files": [
+    "index.js",
+    "parser.js",
+    "db.js",
+    "server.js"
+  ],
   "scripts": {
     "start": "node index.js",
     "test": "node --test test/*.test.js"
