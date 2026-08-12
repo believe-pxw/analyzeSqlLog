@@ -61,7 +61,7 @@ function cleanSqlText(text) {
  * @param {function} onRecord - 每解析完一条 SQL 结构化记录时的回调函数
  * @returns {Promise<{totalLines: number, totalRecords: number}>}
  */
-async function parseLogFile(filePath, onRecord) {
+async function parseLogFile(filePath, onRecord, startRecordId = 0) {
     const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 64 * 1024 });
     const rl = readline.createInterface({
         input: fileStream,
@@ -69,13 +69,13 @@ async function parseLogFile(filePath, onRecord) {
     });
 
     let totalLines = 0;
-    let totalRecords = 0;
+    let totalRecords = startRecordId;
 
     let currentRecord = null;
     let captureState = null; // 'sql_template' | 'full_sql' | null
     let lastHeaderInfo = { logTime: '', traceId: '-', threadName: '-' };
 
-    function flushCurrent() {
+    async function flushCurrent() {
         if (currentRecord) {
             currentRecord.sql_template = cleanSqlText(currentRecord.sql_template);
             currentRecord.full_sql = cleanSqlText(currentRecord.full_sql);
@@ -90,7 +90,7 @@ async function parseLogFile(filePath, onRecord) {
             if (currentRecord.sql_template || currentRecord.full_sql) {
                 totalRecords++;
                 currentRecord.id = totalRecords;
-                onRecord(currentRecord);
+                await onRecord(currentRecord);
             }
         }
         currentRecord = null;
@@ -106,7 +106,7 @@ async function parseLogFile(filePath, onRecord) {
 
         if (isAnyLogHeader) {
             // 一旦遇到任何新日志 Header，必然刷新闭合前一条 SQL 记录
-            flushCurrent();
+            await flushCurrent();
 
             // 无论任何类名的 Header，都记忆更新最近的 Header 上下文
             lastHeaderInfo = parseLogHeader(line);
@@ -216,8 +216,8 @@ async function parseLogFile(filePath, onRecord) {
         }
     }
 
-    flushCurrent();
-    return { totalLines, totalRecords };
+    await flushCurrent();
+    return { totalLines, totalRecords: totalRecords - startRecordId };
 }
 
 /**
@@ -256,7 +256,7 @@ async function parseLogs(targetPath, onRecord) {
     let grandTotalRecords = 0;
 
     for (const file of files) {
-        const result = await parseLogFile(file, onRecord);
+        const result = await parseLogFile(file, onRecord, grandTotalRecords);
         grandTotalLines += result.totalLines;
         grandTotalRecords += result.totalRecords;
     }

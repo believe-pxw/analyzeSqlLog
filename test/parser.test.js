@@ -273,3 +273,21 @@ test('14. 独立新增测试：parseLogs 递归深度扫描层级子目录 serve
     fs.rmdirSync(subDir);
     fs.rmdirSync(tempDir);
 });
+
+test('15. 独立新增测试：onRecord 异步背压回调等待机制断言测试', async () => {
+    const tempFilePath = path.join(__dirname, 'test_backpressure.log');
+    fs.writeFileSync(tempFilePath, `2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-bp1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[1ms]\n>SQL语句:[select 1]\n2026-08-12 10:00:01.000 INFO [DevNode] [] [] [] [t-bp2] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[2ms]\n>SQL语句:[select 2]`, 'utf-8');
+
+    let isProcessing = false;
+    let maxConcurrent = 0;
+
+    await parseLogFile(tempFilePath, async () => {
+        if (isProcessing) maxConcurrent++;
+        isProcessing = true;
+        await new Promise(r => setTimeout(r, 10));
+        isProcessing = false;
+    });
+
+    fs.unlinkSync(tempFilePath);
+    assert.strictEqual(maxConcurrent, 0);
+});
