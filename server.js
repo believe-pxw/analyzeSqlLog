@@ -8,21 +8,23 @@ function safeJsonStringify(obj) {
 }
 
 /**
- * 强健的列名精简算法：查找 SELECT 与 FROM，将冗长的列名区间替换为 select ... from
+ * 强健的列名精简算法：无论大写小写、换行缩进，将 SELECT 与 FROM 之间的冗长列名区间 100% 替换为 select ... from
  */
 function compressSqlColumns(sql) {
     if (!sql) return '';
     const str = sql.trim();
-    const selectIdx = str.search(/select/i);
-    const fromIdx = str.search(/\sfrom\s/i);
+    const lower = str.toLowerCase();
+    
+    const selectIdx = lower.indexOf('select');
+    const fromIdx = lower.indexOf('from');
 
     if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-        const selectPart = str.substring(0, selectIdx + 6);
+        const selectHead = str.substring(0, selectIdx + 6);
         const cols = str.substring(selectIdx + 6, fromIdx);
-        const fromPart = str.substring(fromIdx);
+        const fromTail = str.substring(fromIdx);
 
-        if (cols.includes(',') || cols.trim().length > 25) {
-            return selectPart + ' ...' + fromPart;
+        if (cols.includes(',') || cols.trim().length > 15) {
+            return selectHead + ' ... ' + fromTail.trim();
         }
     }
     return str;
@@ -144,7 +146,7 @@ function getDashboardHtml() {
         :root {
             --bg: #f8fafc;
             --panel-bg: #ffffff;
-            --border: #e2e8f0;
+            --border: #cbd5e1;
             --accent: #0284c7;
             --accent-hover: #0369a1;
             --accent-green: #16a34a;
@@ -152,53 +154,53 @@ function getDashboardHtml() {
             --accent-yellow: #d97706;
             --text: #0f172a;
             --text-muted: #64748b;
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
             background-color: var(--bg);
             color: var(--text);
-            line-height: 1.5;
-            padding: 24px;
+            line-height: 1.4;
+            padding: 10px 16px;
         }
 
-        .container { max-width: 1440px; margin: 0 auto; }
+        .container { max-width: 1600px; margin: 0 auto; }
         
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 18px 24px;
+            padding: 8px 16px;
             background: var(--panel-bg);
             box-shadow: var(--shadow);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            margin-bottom: 20px;
+            border-radius: 8px;
+            margin-bottom: 10px;
         }
 
-        .title { display: flex; align-items: center; gap: 12px; }
-        .title h1 { font-size: 22px; font-weight: 700; color: #0284c7; }
-        .badge { background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; border: 1px solid #bae6fd; }
+        .title { display: flex; align-items: center; gap: 10px; }
+        .title h1 { font-size: 18px; font-weight: 700; color: #0284c7; }
+        .badge { background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; border: 1px solid #bae6fd; }
 
         .tabs {
             display: flex;
-            gap: 8px;
-            margin-bottom: 20px;
+            gap: 6px;
+            margin-bottom: 10px;
             border-bottom: 2px solid var(--border);
-            padding-bottom: 8px;
+            padding-bottom: 4px;
         }
         .tab-btn {
             background: transparent;
             border: none;
             color: var(--text-muted);
-            padding: 10px 20px;
-            border-radius: 8px;
+            padding: 6px 14px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
-            transition: all 0.2s;
+            transition: all 0.15s;
         }
         .tab-btn:hover { color: var(--accent); background: #f1f5f9; }
         .tab-btn.active { color: var(--accent); background: #e0f2fe; border: 1px solid #bae6fd; }
@@ -208,55 +210,54 @@ function getDashboardHtml() {
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 20px;
-            margin-bottom: 24px;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 12px;
         }
 
         .stat-card {
             background: var(--panel-bg);
             border: 1px solid var(--border);
             box-shadow: var(--shadow);
-            border-radius: 12px;
-            padding: 24px;
+            border-radius: 8px;
+            padding: 14px 18px;
             display: flex;
             flex-direction: column;
         }
-        .stat-card .label { font-size: 14px; color: var(--text-muted); font-weight: 500; }
-        .stat-card .value { font-size: 30px; font-weight: 700; margin-top: 8px; color: var(--text); }
+        .stat-card .label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+        .stat-card .value { font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--text); }
 
         .toolbar {
             display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
+            gap: 8px;
+            margin-bottom: 8px;
             align-items: center;
             flex-wrap: wrap;
         }
         .search-input {
             flex: 1;
-            min-width: 200px;
+            min-width: 180px;
             background: #ffffff;
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 9px 14px;
+            border-radius: 6px;
+            padding: 5px 10px;
             color: var(--text);
-            font-size: 14px;
-            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            font-size: 13px;
         }
         .search-input:focus { outline: none; border-color: var(--accent); }
         
         .filter-checkbox {
             display: flex;
             align-items: center;
-            gap: 6px;
-            font-size: 13.5px;
+            gap: 4px;
+            font-size: 12.5px;
             color: #334155;
             font-weight: 500;
             cursor: pointer;
             user-select: none;
             background: #f1f5f9;
-            padding: 8px 12px;
-            border-radius: 8px;
+            padding: 5px 10px;
+            border-radius: 6px;
             border: 1px solid #e2e8f0;
         }
 
@@ -264,12 +265,12 @@ function getDashboardHtml() {
             background: var(--accent);
             color: #ffffff;
             border: none;
-            padding: 9px 18px;
-            border-radius: 8px;
+            padding: 5px 14px;
+            border-radius: 6px;
             font-weight: 600;
+            font-size: 13px;
             cursor: pointer;
-            transition: background 0.2s;
-            box-shadow: var(--shadow);
+            transition: background 0.15s;
         }
         .btn:hover { background: var(--accent-hover); }
 
@@ -277,12 +278,12 @@ function getDashboardHtml() {
             background: var(--panel-bg);
             border: 1px solid var(--border);
             box-shadow: var(--shadow);
-            border-radius: 12px;
+            border-radius: 8px;
             overflow-x: auto;
         }
-        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px; }
-        th, td { padding: 14px 18px; border-bottom: 1px solid var(--border); }
-        th { background: #f8fafc; color: var(--text-muted); font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
+        th, td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f8fafc; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
         tr:hover { background: #f1f5f9; }
 
         .sql-box-wrapper {
@@ -291,31 +292,32 @@ function getDashboardHtml() {
 
         .sql-code {
             font-family: "Fira Code", Consolas, Monaco, monospace;
-            background: #f1f5f9;
-            padding: 10px 14px;
-            border-radius: 6px;
+            background: #f8fafc;
+            padding: 4px 8px;
+            border-radius: 4px;
             color: #1e293b;
             white-space: pre-wrap;
             word-break: break-all;
-            max-height: 140px;
+            max-height: 100px;
             overflow-y: auto;
-            border: 1px solid #cbd5e1;
+            border: 1px solid #e2e8f0;
+            font-size: 12px;
+            line-height: 1.35;
         }
 
         .sql-toggle-btn {
             background: #0284c7;
             color: #ffffff;
             border: none;
-            padding: 3px 9px;
-            border-radius: 4px;
+            padding: 1px 6px;
+            border-radius: 3px;
             cursor: pointer;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
-            margin-bottom: 6px;
+            margin-bottom: 3px;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            transition: background 0.2s;
+            gap: 2px;
         }
         .sql-toggle-btn:hover { background: #0369a1; }
         .sql-toggle-btn.expanded { background: #64748b; }
@@ -327,14 +329,14 @@ function getDashboardHtml() {
         .tag-freq { color: var(--accent-yellow); font-weight: 700; }
 
         .copy-btn {
-            background: #e2e8f0;
+            background: #f1f5f9;
             border: 1px solid #cbd5e1;
             color: #475569;
-            padding: 3px 8px;
-            border-radius: 4px;
+            padding: 1px 6px;
+            border-radius: 3px;
             cursor: pointer;
-            font-size: 12px;
-            margin-top: 6px;
+            font-size: 11px;
+            margin-top: 3px;
             display: inline-block;
             font-weight: 500;
         }
@@ -345,42 +347,42 @@ function getDashboardHtml() {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 14px 20px;
+            padding: 6px 14px;
             background: #ffffff;
             border-top: 1px solid var(--border);
-            border-bottom-left-radius: 12px;
-            border-bottom-right-radius: 12px;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
         }
-        .pagination-info { font-size: 13.5px; color: var(--text-muted); }
-        .pagination-controls { display: flex; align-items: center; gap: 8px; }
+        .pagination-info { font-size: 12px; color: var(--text-muted); }
+        .pagination-controls { display: flex; align-items: center; gap: 6px; }
         .page-btn {
             background: #f1f5f9;
             border: 1px solid #cbd5e1;
             color: #334155;
-            padding: 5px 12px;
-            border-radius: 6px;
+            padding: 3px 8px;
+            border-radius: 4px;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 500;
         }
         .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .page-btn:hover:not(:disabled) { background: #e2e8f0; color: #0f172a; }
         .page-select {
-            padding: 5px 8px;
-            border-radius: 6px;
+            padding: 2px 6px;
+            border-radius: 4px;
             border: 1px solid #cbd5e1;
             background: #ffffff;
-            font-size: 13px;
+            font-size: 12px;
         }
         .diagnose-banner {
             background: #f0fdf4;
             border: 1px solid #bbf7d0;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
+            border-radius: 6px;
+            padding: 6px 12px;
+            margin-bottom: 8px;
             color: #166534;
-            font-size: 13.5px;
-            line-height: 1.6;
+            font-size: 12.5px;
+            line-height: 1.4;
         }
     </style>
 </head>
@@ -391,39 +393,37 @@ function getDashboardHtml() {
                 <h1>SQL 日志分析器</h1>
                 <span class="badge">DuckDB 纯内存极速分析版</span>
             </div>
-            <div id="parse-time" style="font-size: 13px; color: var(--text-muted);">数据加载完成</div>
+            <div id="parse-time" style="font-size: 12px; color: var(--text-muted);">数据加载完成</div>
         </header>
 
-        <!-- Tab 菜单：N+1诊所第一，概览放在最后 -->
+        <!-- Tab 菜单：顺序为 N+1诊所第一 -> 慢SQL -> Trace链路 -> SQL频次榜 (倒数第二) -> 概览 (倒数第一) -->
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
-            <button class="tab-btn" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
             <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
             <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
+            <button class="tab-btn" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
             <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
         </div>
 
         <!-- 1. N+1 诊断 Panel (默认 Active) -->
         <div id="panel-diagnose" class="panel active">
             <div class="diagnose-banner">
-                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong><br>
-                基于日志中 <code>dbManager</code> 的内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），**精确捕捉在【同一个数据库事务 / 连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板**。<br>
-                在同一事务中反复执行相同 SQL 模板，是后端代码写了 <code>for</code> 循环查库的硬核铁证！
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），精准捕捉在【同一个数据库事务/连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板，避免 For 循环查库。
             </div>
             <div class="toolbar">
-                <input type="text" id="trace-diagnose" class="search-input" style="max-width: 280px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
+                <input type="text" id="trace-diagnose" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
                 <input type="text" id="search-diagnose" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 EMM_...）" oninput="filterDiagnoseTable()">
             </div>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 60px;">#</th>
-                            <th style="width: 220px;">TraceID</th>
-                            <th style="width: 200px;">dbManager 事务句柄</th>
-                            <th style="width: 140px;">同一事务内循环次数</th>
-                            <th style="width: 120px;">事务内浪费耗时</th>
-                            <th style="width: 180px;">诊断重构建议</th>
+                            <th style="width: 50px;">#</th>
+                            <th style="width: 200px;">TraceID</th>
+                            <th style="width: 180px;">dbManager 事务句柄</th>
+                            <th style="width: 130px;">同一事务内循环次数</th>
+                            <th style="width: 110px;">事务内浪费耗时</th>
+                            <th style="width: 160px;">诊断重构建议</th>
                             <th>在 For 循环体中反复执行的 SQL 模板</th>
                         </tr>
                     </thead>
@@ -432,36 +432,7 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 2. 频次榜 Panel -->
-        <div id="panel-repeated" class="panel">
-            <div class="toolbar">
-                <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
-                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
-                <label class="filter-checkbox">
-                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated(1)">
-                    🚫 排除后台锁/定时任务
-                </label>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width: 60px;">#</th>
-                            <th style="width: 100px;">全局总次数</th>
-                            <th style="width: 110px;">总耗时 (ms)</th>
-                            <th style="width: 100px;">平均耗时</th>
-                            <th style="width: 100px;">最大耗时</th>
-                            <th style="width: 90px;">Trace 数</th>
-                            <th>SQL 参数化模板</th>
-                        </tr>
-                    </thead>
-                    <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
-                </table>
-                <div class="pagination-bar" id="repeated-pagination"></div>
-            </div>
-        </div>
-
-        <!-- 3. 慢 SQL Panel -->
+        <!-- 2. 慢 SQL Panel -->
         <div id="panel-slow" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-slow" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
@@ -475,11 +446,11 @@ function getDashboardHtml() {
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 60px;">#</th>
-                            <th style="width: 110px;">执行耗时</th>
+                            <th style="width: 50px;">#</th>
+                            <th style="width: 100px;">执行耗时</th>
                             <th style="width: 180px;">TraceID</th>
-                            <th style="width: 160px;">时间</th>
-                            <th style="width: 90px;">影响行数</th>
+                            <th style="width: 150px;">时间</th>
+                            <th style="width: 80px;">影响行数</th>
                             <th>完整执行 SQL</th>
                         </tr>
                     </thead>
@@ -489,22 +460,22 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 4. Trace 链路 Panel -->
+        <!-- 3. Trace 链路 Panel -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-input" class="search-input" style="max-width: 320px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
+                <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
                 <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="filterTraceTable()">
                 <button class="btn" onclick="loadTraceData()">搜索 Trace 链路</button>
             </div>
-            <div id="trace-summary" style="margin-bottom: 12px; font-size: 14px; color: var(--accent); font-weight: 600;"></div>
+            <div id="trace-summary" style="margin-bottom: 8px; font-size: 13px; color: var(--accent); font-weight: 600;"></div>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
-                            <th style="width: 60px;">序号</th>
-                            <th style="width: 160px;">时间</th>
-                            <th style="width: 100px;">耗时 (ms)</th>
-                            <th style="width: 90px;">影响行数</th>
+                            <th style="width: 50px;">序号</th>
+                            <th style="width: 150px;">时间</th>
+                            <th style="width: 90px;">耗时 (ms)</th>
+                            <th style="width: 80px;">影响行数</th>
                             <th>执行 SQL 语句</th>
                         </tr>
                     </thead>
@@ -513,7 +484,36 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 5. 独立概览统计 Tab Panel (放最后) -->
+        <!-- 4. 频次榜 Panel (倒数第二) -->
+        <div id="panel-repeated" class="panel">
+            <div class="toolbar">
+                <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
+                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated(1)">
+                    🚫 排除后台锁/定时任务
+                </label>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">#</th>
+                            <th style="width: 90px;">全局总次数</th>
+                            <th style="width: 100px;">总耗时 (ms)</th>
+                            <th style="width: 90px;">平均耗时</th>
+                            <th style="width: 90px;">最大耗时</th>
+                            <th style="width: 80px;">Trace 数</th>
+                            <th>SQL 参数化模板</th>
+                        </tr>
+                    </thead>
+                    <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
+                </table>
+                <div class="pagination-bar" id="repeated-pagination"></div>
+            </div>
+        </div>
+
+        <!-- 5. 独立概览统计 Tab Panel (倒数第一) -->
         <div id="panel-overview" class="panel">
             <div class="stats-grid">
                 <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
@@ -573,21 +573,23 @@ function getDashboardHtml() {
         }
 
         /**
-         * 强健的列名精简算法：查找 SELECT 与 FROM，将冗长的列名区间替换为 select ... from
+         * 100% 精准的列名精简算法：查找 SELECT 与 FROM 替换为 select ... from
          */
         function compressSqlColumns(sql) {
             if (!sql) return '';
             const str = sql.trim();
-            const selectIdx = str.search(/select/i);
-            const fromIdx = str.search(/\sfrom\s/i);
+            const lower = str.toLowerCase();
+
+            const selectIdx = lower.indexOf('select');
+            const fromIdx = lower.indexOf('from');
 
             if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-                const selectPart = str.substring(0, selectIdx + 6);
+                const selectHead = str.substring(0, selectIdx + 6);
                 const cols = str.substring(selectIdx + 6, fromIdx);
-                const fromPart = str.substring(fromIdx);
+                const fromTail = str.substring(fromIdx);
 
-                if (cols.includes(',') || cols.trim().length > 25) {
-                    return selectPart + ' ...' + fromPart;
+                if (cols.includes(',') || cols.trim().length > 15) {
+                    return selectHead + ' ... ' + fromTail.trim();
                 }
             }
             return str;
@@ -732,11 +734,11 @@ function getDashboardHtml() {
             const totalPages = Math.ceil(total / pageSize) || 1;
 
             container.innerHTML = \`
-                <div class="pagination-info">共 \${total.toLocaleString()} 条记录，第 \${page} / \${totalPages} 页</div>
+                <div class="pagination-info">共 \${total.toLocaleString()} 条，第 \${page} / \${totalPages} 页</div>
                 <div class="pagination-controls">
                     <button class="page-btn" \${page <= 1 ? 'disabled' : ''} onclick="changePage('\${containerId}', 1)">首页</button>
                     <button class="page-btn" \${page <= 1 ? 'disabled' : ''} onclick="changePage('\${containerId}', \${page - 1})">上一页</button>
-                    <span style="font-size: 13px;">每页</span>
+                    <span style="font-size: 12px;">每页</span>
                     <select class="page-select" onchange="changePageSize('\${containerId}', this.value)">
                         <option value="15" \${pageSize === 15 ? 'selected' : ''}>15 条</option>
                         <option value="20" \${pageSize === 20 ? 'selected' : ''}>20 条</option>
@@ -850,18 +852,25 @@ function getDashboardHtml() {
                 const suggestion = isSevere ? '改写为 IN(...) 批量查询' : '增加二级缓存/批处理';
                 
                 const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
+                const fullSql = r.sql_template || '';
+                const briefSql = compressSqlColumns(fullSql);
+                const hasAbbr = briefSql !== fullSql;
+                const elementId = 'diag-sql-' + i;
 
                 return \`
                 <tr>
                     <td>\${i + 1}</td>
                     <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
-                    <td><code style="background: #f1f5f9; padding: 3px 6px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
+                    <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
                     <td><span class="\${tagClass}">\${tagText}</span></td>
                     <td>\${r.total_time_ms} ms</td>
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
-                        <div class="sql-code">\${escapeHtml(r.sql_template)}</div>
-                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.sql_template)}\\\`)">复制</button>
+                        <div class="sql-box-wrapper">
+                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
+                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
+                        </div>
                     </td>
                 </tr>
             \`;
