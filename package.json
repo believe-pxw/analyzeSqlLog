@@ -1,18 +1,25 @@
 {
   "name": "analyzesqllog",
   "version": "1.0.0",
-  "description": "",
+  "description": "极速 SQL 日志分析与可视化工具",
   "main": "index.js",
-  "bin": "index.js",
+  "bin": {
+    "sqllog": "./index.js",
+    "sqlanalyzer": "./index.js"
+  },
   "scripts": {
     "start": "node index.js",
     "test": "node --test test/*.test.js"
   },
-  "keywords": [],
+  "keywords": [
+    "sql",
+    "log",
+    "analyzer",
+    "duckdb"
+  ],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "duckdb": "^1.4.4"
+    "duckdb": "^1.2.0"
   }
 }

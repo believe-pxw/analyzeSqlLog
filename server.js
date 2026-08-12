@@ -34,13 +34,17 @@ function createServer(dbInstance, parseStats, port = 3000) {
 
                 if (pathname === '/api/top-repeated' && method === 'GET') {
                     const limit = parsedUrl.query.limit || 30;
-                    const rows = await dbInstance.getTopRepeated(limit);
+                    const traceId = parsedUrl.query.traceId || '';
+                    const excludeBg = parsedUrl.query.excludeBackground === 'true';
+                    const rows = await dbInstance.getTopRepeated(limit, traceId, excludeBg);
                     return res.end(safeJsonStringify({ success: true, data: rows }));
                 }
 
                 if (pathname === '/api/top-slow' && method === 'GET') {
                     const limit = parsedUrl.query.limit || 30;
-                    const rows = await dbInstance.getTopSlow(limit);
+                    const traceId = parsedUrl.query.traceId || '';
+                    const excludeBg = parsedUrl.query.excludeBackground === 'true';
+                    const rows = await dbInstance.getTopSlow(limit, traceId, excludeBg);
                     return res.end(safeJsonStringify({ success: true, data: rows }));
                 }
 
@@ -205,24 +209,42 @@ function getDashboardHtml() {
             display: flex;
             gap: 12px;
             margin-bottom: 16px;
+            align-items: center;
+            flex-wrap: wrap;
         }
         .search-input {
             flex: 1;
+            min-width: 200px;
             background: #ffffff;
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 10px 14px;
+            padding: 9px 14px;
             color: var(--text);
             font-size: 14px;
             box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
         }
-        .search-input:focus { outline: none; border-color: var(--accent); ring: 2px rgba(2, 132, 199, 0.2); }
+        .search-input:focus { outline: none; border-color: var(--accent); }
         
+        .filter-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13.5px;
+            color: #334155;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            background: #f1f5f9;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+
         .btn {
             background: var(--accent);
             color: #ffffff;
             border: none;
-            padding: 10px 20px;
+            padding: 9px 18px;
             border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
@@ -321,7 +343,12 @@ function getDashboardHtml() {
         <!-- 频次榜 Panel -->
         <div id="panel-repeated" class="panel active">
             <div class="toolbar">
+                <input type="text" id="trace-repeated" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated()">
                 <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_... / ECO_...）" oninput="filterRepeatedTable()">
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated()">
+                    🚫 排除后台锁/定时任务 (SYS_Lock/ScheduledTask)
+                </label>
             </div>
             <div class="table-container">
                 <table>
@@ -344,7 +371,12 @@ function getDashboardHtml() {
         <!-- 慢 SQL Panel -->
         <div id="panel-slow" class="panel">
             <div class="toolbar">
+                <input type="text" id="trace-slow" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow()">
                 <input type="text" id="search-slow" class="search-input" placeholder="搜索慢 SQL 语句..." oninput="filterSlowTable()">
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="chk-slow-bg" onchange="loadSlow()">
+                    🚫 排除后台锁/定时任务 (SYS_Lock/ScheduledTask)
+                </label>
             </div>
             <div class="table-container">
                 <table>
@@ -452,7 +484,10 @@ function getDashboardHtml() {
         }
 
         async function loadRepeated() {
-            const res = await fetch('/api/top-repeated?limit=50');
+            const traceId = document.getElementById('trace-repeated').value.trim();
+            const excludeBg = document.getElementById('chk-repeated-bg').checked;
+
+            const res = await fetch(\`/api/top-repeated?limit=50&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
             const json = await res.json();
             if (json.success) {
                 rawRepeatedData = json.data;
@@ -489,7 +524,10 @@ function getDashboardHtml() {
         }
 
         async function loadSlow() {
-            const res = await fetch('/api/top-slow?limit=50');
+            const traceId = document.getElementById('trace-slow').value.trim();
+            const excludeBg = document.getElementById('chk-slow-bg').checked;
+
+            const res = await fetch(\`/api/top-slow?limit=50&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
             const json = await res.json();
             if (json.success) {
                 rawSlowData = json.data;

@@ -1,22 +1,29 @@
 const duckdb = require('duckdb');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 
 class SqlLogDatabase {
     /**
-     * @param {string} dbPath - 数据库路径，缺省为本地文件 'sqllogs.duckdb'，若为 ':memory:' 则为纯内存模式
+     * @param {string} dbPath - 数据库路径，若为 ':memory:' 则为纯内存模式，缺省保存在当前目录或临时目录
      */
     constructor(dbPath) {
-        this.dbFilePath = dbPath || path.join(__dirname, 'sqllogs.duckdb');
+        if (!dbPath) {
+            dbPath = path.join(process.cwd(), `sqllogs_${Date.now()}.duckdb`);
+        }
         
-        // 如果是文件模式且旧文件存在，重建前可选择清理或直接连接
-        this.db = new duckdb.Database(this.dbFilePath);
+        this.dbFilePath = dbPath;
+        try {
+            this.db = new duckdb.Database(this.dbFilePath);
+        } catch (e) {
+            this.dbFilePath = path.join(os.tmpdir(), `sqllogs_${Date.now()}.duckdb`);
+            this.db = new duckdb.Database(this.dbFilePath);
+        }
         this.conn = this.db.connect();
     }
 
     async initSchema() {
         return new Promise((resolve, reject) => {
-            // 先清理旧表以保证重新扫描时数据的干净
             const sql = `
                 DROP TABLE IF EXISTS sqllogs;
                 CREATE TABLE sqllogs (
@@ -42,31 +49,27 @@ class SqlLogDatabase {
     async insertBatch(records) {
         if (!records || records.length === 0) return;
         return new Promise((resolve, reject) => {
-            this.conn.exec('BEGIN TRANSACTION', (err) => {
-                if (err) return reject(err);
-                const stmt = this.conn.prepare(`
-                    INSERT INTO sqllogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
-                for (const r of records) {
-                    stmt.run(
-                        r.id,
-                        r.log_time || '',
-                        r.trace_id || '-',
-                        r.thread_name || '-',
-                        r.exec_time_ms || 0,
-                        r.result_rows || 0,
-                        r.db_manager || '',
-                        r.sql_template || '',
-                        r.sql_params || '',
-                        r.full_sql || ''
-                    );
-                }
-                stmt.finalize(() => {
-                    this.conn.exec('COMMIT', (err2) => {
-                        if (err2) reject(err2);
-                        else resolve();
-                    });
-                });
+            const stmt = this.conn.prepare(`
+                INSERT INTO sqllogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+            let count = 0;
+            for (const r of records) {
+                stmt.run(
+                    r.id,
+                    r.log_time || '',
+                    r.trace_id || '-',
+                    r.thread_name || '-',
+                    r.exec_time_ms || 0,
+                    r.result_rows || 0,
+                    r.db_manager || '',
+                    r.sql_template || '',
+                    r.sql_params || '',
+                    r.full_sql || ''
+                );
+            }
+            stmt.finalize((err) => {
+                if (err) reject(err);
+                else resolve();
             });
         });
     }
@@ -80,7 +83,18 @@ class SqlLogDatabase {
         });
     }
 
-    async getTopRepeated(limit = 30) {
+    async getTopRepeated(limit = 30, traceId = '', excludeBackground = false) {
+        let whereClauses = ["sql_template != ''"];
+        if (traceId) {
+            const cleanTraceId = traceId.replace(/'/g, "''");
+            whereClauses.push(`trace_id LIKE '%${cleanTraceId}%'`);
+        }
+        if (excludeBackground) {
+            whereClauses.push(`trace_id != '-' AND sql_template NOT LIKE '%SYS_Lock%' AND sql_template NOT LIKE '%BK_ScheduledTask%'`);
+        }
+
+        const whereSql = 'WHERE ' + whereClauses.join(' AND ');
+
         const sql = `
             SELECT 
                 sql_template,
@@ -90,7 +104,7 @@ class SqlLogDatabase {
                 ROUND(MAX(exec_time_ms), 2) as max_time_ms,
                 COUNT(DISTINCT trace_id) as trace_count
             FROM sqllogs
-            WHERE sql_template != ''
+            ${whereSql}
             GROUP BY sql_template
             ORDER BY count DESC, total_time_ms DESC
             LIMIT ${parseInt(limit, 10)};
@@ -98,11 +112,23 @@ class SqlLogDatabase {
         return this.query(sql);
     }
 
-    async getTopSlow(limit = 30) {
+    async getTopSlow(limit = 30, traceId = '', excludeBackground = false) {
+        let whereClauses = [];
+        if (traceId) {
+            const cleanTraceId = traceId.replace(/'/g, "''");
+            whereClauses.push(`trace_id LIKE '%${cleanTraceId}%'`);
+        }
+        if (excludeBackground) {
+            whereClauses.push(`trace_id != '-' AND sql_template NOT LIKE '%SYS_Lock%' AND sql_template NOT LIKE '%BK_ScheduledTask%'`);
+        }
+
+        const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+
         const sql = `
             SELECT 
                 id, log_time, trace_id, thread_name, exec_time_ms, result_rows, sql_template, full_sql
             FROM sqllogs
+            ${whereSql}
             ORDER BY exec_time_ms DESC, id ASC
             LIMIT ${parseInt(limit, 10)};
         `;
@@ -129,7 +155,7 @@ class SqlLogDatabase {
                 COUNT(*) as repeat_count,
                 ROUND(SUM(exec_time_ms), 2) as total_time_ms
             FROM sqllogs
-            WHERE trace_id != '-' AND trace_id != '' AND sql_template != ''
+            WHERE trace_id != '-' AND trace_id != '' AND sql_template != '' AND sql_template NOT LIKE '%SYS_Lock%' AND sql_template NOT LIKE '%BK_ScheduledTask%'
             GROUP BY trace_id, sql_template
             HAVING COUNT(*) >= 5
             ORDER BY repeat_count DESC, total_time_ms DESC

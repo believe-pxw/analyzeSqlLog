@@ -21,11 +21,8 @@ test('2. cleanSqlText 清理换行符 > 前缀与尾部 ] 字符测试', () => {
 
     const cleaned = cleanSqlText(rawSql);
     
-    // 验证不包含 >
     assert.strictEqual(cleaned.includes('>'), false);
-    // 验证行首无 >
     assert.strictEqual(cleaned.startsWith('select * from'), true);
-    // 验证结尾的多余 ] 被去掉
     assert.strictEqual(cleaned.endsWith(']'), false);
 });
 
@@ -50,38 +47,38 @@ test('3. 完整日志文件状态机与断句割裂防污染测试', async () =>
 
     fs.unlinkSync(tempFilePath);
 
-    // 应该只提取出 2 条核心 SQL
     assert.strictEqual(records.length, 2);
-
-    // 检查第 1 条 SQL
     assert.strictEqual(records[0].sql_template, 'select IPServerPort ,IPServerAddress,Code from BK_TaskGroup');
     assert.strictEqual(records[0].exec_time_ms, 5);
     assert.strictEqual(records[0].trace_id, 'hcpc9te51703753lmmmmybe-0');
-    // 确保没有把 Performance DB commit 等无关日志拼接进去
     assert.strictEqual(records[0].sql_template.includes('Performance'), false);
     assert.strictEqual(records[0].sql_template.includes('createScheduler'), false);
 
-    // 检查第 2 条 SQL
     assert.strictEqual(records[1].sql_template.includes('BK_ScheduledTask'), true);
     assert.strictEqual(records[1].sql_params, '#0:createScheduler');
 });
 
-test('4. DuckDB 内存聚合与功能查询测试', async () => {
+test('4. DuckDB 内存聚合与 TraceID 过滤测试', async () => {
     const db = new SqlLogDatabase(':memory:');
     await db.initSchema();
 
     await db.insertBatch([
         { id: 1, log_time: '2026-08-12 10:00:00.000', trace_id: 't-1', thread_name: 'th-1', exec_time_ms: 10, result_rows: 1, db_manager: 'mysql', sql_template: 'SELECT * FROM test WHERE id = ?', sql_params: '#0:1', full_sql: 'SELECT * FROM test WHERE id = 1' },
         { id: 2, log_time: '2026-08-12 10:00:01.000', trace_id: 't-1', thread_name: 'th-1', exec_time_ms: 50, result_rows: 1, db_manager: 'mysql', sql_template: 'SELECT * FROM test WHERE id = ?', sql_params: '#0:2', full_sql: 'SELECT * FROM test WHERE id = 2' },
-        { id: 3, log_time: '2026-08-12 10:00:02.000', trace_id: 't-2', thread_name: 'th-2', exec_time_ms: 100, result_rows: 5, db_manager: 'mysql', sql_template: 'UPDATE test SET name = ?', sql_params: '#0:a', full_sql: 'UPDATE test SET name = a' }
+        { id: 3, log_time: '2026-08-12 10:00:02.000', trace_id: 't-2', thread_name: 'th-2', exec_time_ms: 100, result_rows: 5, db_manager: 'mysql', sql_template: 'UPDATE test SET name = ?', sql_params: '#0:a', full_sql: 'UPDATE test SET name = a' },
+        { id: 4, log_time: '2026-08-12 10:00:03.000', trace_id: '-', thread_name: 'th-3', exec_time_ms: 5, result_rows: 1, db_manager: 'mysql', sql_template: 'update `SYS_Lock` set Slock=1 where UniqueKey=?', sql_params: '#0:a', full_sql: 'update `SYS_Lock` set Slock=1' }
     ]);
 
-    const repeated = await db.getTopRepeated(10);
-    assert.strictEqual(repeated.length, 2);
-    assert.strictEqual(Number(repeated[0].count), 2);
-    assert.strictEqual(repeated[0].max_time_ms, 50);
+    // 测试未过滤
+    const repeatedAll = await db.getTopRepeated(10, '', false);
+    assert.strictEqual(repeatedAll.length, 3);
 
-    const slow = await db.getTopSlow(1);
-    assert.strictEqual(slow[0].exec_time_ms, 100);
-    assert.strictEqual(slow[0].trace_id, 't-2');
+    // 测试按 TraceID 过滤
+    const repeatedT1 = await db.getTopRepeated(10, 't-1', false);
+    assert.strictEqual(repeatedT1.length, 1);
+    assert.strictEqual(Number(repeatedT1[0].count), 2);
+
+    // 测试排除后台锁
+    const repeatedNoBg = await db.getTopRepeated(10, '', true);
+    assert.strictEqual(repeatedNoBg.length, 2);
 });

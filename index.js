@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const path = require('path');
-const { exec } = require('child_process');
+const fs = require('fs');
 const SqlLogDatabase = require('./db');
 const { parseLogs } = require('./parser');
 const { createServer } = require('./server');
@@ -11,13 +11,31 @@ const DEFAULT_LOG_DIR = `D:\\Users\\boke\\Desktop\\source\\bokeerp\\erp-backend\
 
 async function main() {
     console.log(`\n==================================================`);
-    console.log(`⚡ 极速 SQL 日志分析器 (Node.js + DuckDB 内存版)`);
+    console.log(`⚡ 极速 SQL 日志分析器 (sqllog CLI)`);
     console.log(`==================================================`);
 
-    // 尝试获取命令行传入的日志路径，否则使用默认路径
     const args = process.argv.slice(2);
-    let targetPath = args[0] || DEFAULT_LOG_DIR;
-    targetPath = path.resolve(targetPath);
+    let targetPath = '';
+
+    if (args[0]) {
+        targetPath = path.resolve(args[0]);
+    } else {
+        // 如果当前工作目录有 log 文件，优先解析当前目录
+        const cwd = process.cwd();
+        let hasLocalLogs = false;
+        try {
+            const files = fs.readdirSync(cwd);
+            hasLocalLogs = files.some(f => f.endsWith('.log'));
+        } catch (e) {}
+
+        if (hasLocalLogs) {
+            targetPath = cwd;
+        } else if (fs.existsSync(DEFAULT_LOG_DIR)) {
+            targetPath = DEFAULT_LOG_DIR;
+        } else {
+            targetPath = cwd;
+        }
+    }
 
     console.log(`\n📂 正在扫描日志路径: ${targetPath}`);
 
@@ -54,8 +72,8 @@ async function main() {
 
     // 命令行打印 Top 5 频次 SQL
     try {
-        const topRepeated = await db.getTopRepeated(5);
-        console.log(`\n📊 【Top 5 出现次数最多的 SQL 模板】`);
+        const topRepeated = await db.getTopRepeated(5, '', true);
+        console.log(`\n📊 【Top 5 业务 SQL 模板 (已自动排除后台任务)】`);
         topRepeated.forEach((r, idx) => {
             console.log(`\n#${idx + 1} 出现次数: ${r.count} 次 | 总耗时: ${r.total_time_ms} ms | 平均: ${r.avg_time_ms} ms`);
             console.log(`   SQL 模板: ${r.sql_template.replace(/\s+/g, ' ').substring(0, 120)}...`);
@@ -66,8 +84,8 @@ async function main() {
 
     // 命令行打印 Top 5 慢 SQL
     try {
-        const topSlow = await db.getTopSlow(5);
-        console.log(`\n🐢 【Top 5 执行耗时最长的 SQL】`);
+        const topSlow = await db.getTopSlow(5, '', true);
+        console.log(`\n🐢 【Top 5 业务慢 SQL (已自动排除后台任务)】`);
         topSlow.forEach((r, idx) => {
             console.log(`\n#${idx + 1} 执行耗时: ${r.exec_time_ms} ms | TraceID: ${r.trace_id} | 时间: ${r.log_time}`);
             console.log(`   SQL: ${(r.full_sql || r.sql_template).replace(/\s+/g, ' ').substring(0, 120)}...`);
