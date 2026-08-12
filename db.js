@@ -202,9 +202,17 @@ class SqlLogDatabase {
     }
 
     /**
-     * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
+     * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID (支持 TraceID 过滤)，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
      */
-    async getDiagnostics() {
+    async getDiagnostics(traceId = '') {
+        let whereClause = "WHERE trace_id != '-' AND db_manager != ''";
+        const params = [];
+
+        if (traceId) {
+            whereClause += ' AND trace_id = ?';
+            params.push(traceId);
+        }
+
         const sql = `
             SELECT 
                 trace_id,
@@ -213,13 +221,13 @@ class SqlLogDatabase {
                 COUNT(*) as repeat_count,
                 SUM(exec_time_ms) as total_time_ms
             FROM sqllogs
-            WHERE trace_id != '-' AND db_manager != ''
+            ${whereClause}
             GROUP BY trace_id, db_manager, sql_template
             HAVING COUNT(*) >= 5
             ORDER BY repeat_count DESC, total_time_ms DESC
-            LIMIT 20
+            LIMIT 50
         `;
-        return await this.query(sql);
+        return await this.query(sql, params);
     }
 
     async close() {

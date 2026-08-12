@@ -80,7 +80,8 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/diagnostics' && method === 'GET') {
-                    const rows = await dbInstance.getDiagnostics();
+                    const traceId = parsedUrl.query.traceId || '';
+                    const rows = await dbInstance.getDiagnostics(traceId);
                     return res.end(safeJsonStringify({ success: true, data: rows }));
                 }
 
@@ -393,16 +394,46 @@ function getDashboardHtml() {
             <div id="parse-time" style="font-size: 13px; color: var(--text-muted);">数据加载完成</div>
         </header>
 
+        <!-- Tab 菜单：N+1诊所第一，概览放在最后 -->
         <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
+            <button class="tab-btn active" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
+            <button class="tab-btn" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
             <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
-            <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
             <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
-            <button class="tab-btn" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
+            <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
         </div>
 
-        <!-- 频次榜 Panel -->
-        <div id="panel-repeated" class="panel active">
+        <!-- 1. N+1 诊断 Panel (默认 Active) -->
+        <div id="panel-diagnose" class="panel active">
+            <div class="diagnose-banner">
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong><br>
+                基于日志中 <code>dbManager</code> 的内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），**精确捕捉在【同一个数据库事务 / 连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板**。<br>
+                在同一事务中反复执行相同 SQL 模板，是后端代码写了 <code>for</code> 循环查库的硬核铁证！
+            </div>
+            <div class="toolbar">
+                <input type="text" id="trace-diagnose" class="search-input" style="max-width: 280px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
+                <input type="text" id="search-diagnose" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 EMM_...）" oninput="filterDiagnoseTable()">
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;">#</th>
+                            <th style="width: 220px;">TraceID</th>
+                            <th style="width: 200px;">dbManager 事务句柄</th>
+                            <th style="width: 140px;">同一事务内循环次数</th>
+                            <th style="width: 120px;">事务内浪费耗时</th>
+                            <th style="width: 180px;">诊断重构建议</th>
+                            <th>在 For 循环体中反复执行的 SQL 模板</th>
+                        </tr>
+                    </thead>
+                    <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 2. 频次榜 Panel -->
+        <div id="panel-repeated" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
                 <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
@@ -430,7 +461,7 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 慢 SQL Panel -->
+        <!-- 3. 慢 SQL Panel -->
         <div id="panel-slow" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-slow" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
@@ -458,19 +489,7 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 独立概览统计 Tab Panel -->
-        <div id="panel-overview" class="panel">
-            <div class="stats-grid">
-                <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
-                <div class="stat-card"><span class="label">SQL 归一模板数</span><span class="value" id="stat-distinct-templates">-</span></div>
-                <div class="stat-card"><span class="label">最高慢 SQL 耗时</span><span class="value" id="stat-max-cost" style="color: var(--accent-red);">-</span></div>
-                <div class="stat-card"><span class="label">独立 Trace 动作数</span><span class="value" id="stat-total-traces" style="color: var(--accent-green);">-</span></div>
-                <div class="stat-card"><span class="label">SQL 总执行耗时</span><span class="value" id="stat-total-time" style="color: var(--accent);">-</span></div>
-                <div class="stat-card"><span class="label">SQL 平均执行耗时</span><span class="value" id="stat-avg-time">-</span></div>
-            </div>
-        </div>
-
-        <!-- Trace 链路 Panel -->
+        <!-- 4. Trace 链路 Panel -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-input" class="search-input" style="max-width: 320px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
@@ -494,28 +513,15 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- N+1 诊断 Panel -->
-        <div id="panel-diagnose" class="panel">
-            <div class="diagnose-banner">
-                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong><br>
-                基于日志中 <code>dbManager</code> 的内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），**精确捕捉在【同一个数据库事务 / 连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板**。<br>
-                在同一事务中反复执行相同 SQL 模板，是后端代码写了 <code>for</code> 循环查库的硬核铁证！
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="width: 60px;">#</th>
-                            <th style="width: 220px;">TraceID</th>
-                            <th style="width: 200px;">dbManager 事务句柄</th>
-                            <th style="width: 140px;">同一事务内循环次数</th>
-                            <th style="width: 120px;">事务内浪费耗时</th>
-                            <th style="width: 180px;">诊断重构建议</th>
-                            <th>在 For 循环体中反复执行的 SQL 模板</th>
-                        </tr>
-                    </thead>
-                    <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
-                </table>
+        <!-- 5. 独立概览统计 Tab Panel (放最后) -->
+        <div id="panel-overview" class="panel">
+            <div class="stats-grid">
+                <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
+                <div class="stat-card"><span class="label">SQL 归一模板数</span><span class="value" id="stat-distinct-templates">-</span></div>
+                <div class="stat-card"><span class="label">最高慢 SQL 耗时</span><span class="value" id="stat-max-cost" style="color: var(--accent-red);">-</span></div>
+                <div class="stat-card"><span class="label">独立 Trace 动作数</span><span class="value" id="stat-total-traces" style="color: var(--accent-green);">-</span></div>
+                <div class="stat-card"><span class="label">SQL 总执行耗时</span><span class="value" id="stat-total-time" style="color: var(--accent);">-</span></div>
+                <div class="stat-card"><span class="label">SQL 平均执行耗时</span><span class="value" id="stat-avg-time">-</span></div>
             </div>
         </div>
     </div>
@@ -524,6 +530,7 @@ function getDashboardHtml() {
         let rawRepeatedData = [];
         let rawSlowData = [];
         let rawTraceData = [];
+        let rawDiagnoseData = [];
 
         let curRepeatedPage = 1;
         let curRepeatedPageSize = 20;
@@ -552,9 +559,9 @@ function getDashboardHtml() {
                 }
             } catch(e) {}
 
+            loadDiagnostics();
             loadRepeated(1);
             loadSlow(1);
-            loadDiagnostics();
         }
 
         function switchTab(name) {
@@ -821,39 +828,55 @@ function getDashboardHtml() {
         }
 
         async function loadDiagnostics() {
-            const res = await fetch('/api/diagnostics');
+            const traceId = document.getElementById('trace-diagnose').value.trim();
+            const res = await fetch('/api/diagnostics?traceId=' + encodeURIComponent(traceId));
             const json = await res.json();
             if (json.success) {
-                const tbody = document.getElementById('diagnose-tbody');
-                if (json.data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = json.data.map((r, i) => {
-                    const isSevere = r.repeat_count >= 20;
-                    const tagClass = isSevere ? 'tag-slow' : 'tag-freq';
-                    const tagText = isSevere ? '🔥 严重 N+1 (' + r.repeat_count + '次)' : '⚠️ 疑似 N+1 (' + r.repeat_count + '次)';
-                    const suggestion = isSevere ? '改写为 IN(...) 批量查询' : '增加二级缓存/批处理';
-                    
-                    // 简化 db_manager 展现，提取后半段的 类名@hashcode
-                    const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
-
-                    return \`
-                    <tr>
-                        <td>\${i + 1}</td>
-                        <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
-                        <td><code style="background: #f1f5f9; padding: 3px 6px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
-                        <td><span class="\${tagClass}">\${tagText}</span></td>
-                        <td>\${r.total_time_ms} ms</td>
-                        <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
-                        <td>
-                            <div class="sql-code">\${escapeHtml(r.sql_template)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.sql_template)}\\\`)">复制</button>
-                        </td>
-                    </tr>
-                \`;
-                }).join('');
+                rawDiagnoseData = json.data;
+                renderDiagnoseTable(rawDiagnoseData);
             }
+        }
+
+        function renderDiagnoseTable(data) {
+            const tbody = document.getElementById('diagnose-tbody');
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.map((r, i) => {
+                const isSevere = r.repeat_count >= 20;
+                const tagClass = isSevere ? 'tag-slow' : 'tag-freq';
+                const tagText = isSevere ? '🔥 严重 N+1 (' + r.repeat_count + '次)' : '⚠️ 疑似 N+1 (' + r.repeat_count + '次)';
+                const suggestion = isSevere ? '改写为 IN(...) 批量查询' : '增加二级缓存/批处理';
+                
+                const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
+
+                return \`
+                <tr>
+                    <td>\${i + 1}</td>
+                    <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
+                    <td><code style="background: #f1f5f9; padding: 3px 6px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
+                    <td><span class="\${tagClass}">\${tagText}</span></td>
+                    <td>\${r.total_time_ms} ms</td>
+                    <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
+                    <td>
+                        <div class="sql-code">\${escapeHtml(r.sql_template)}</div>
+                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.sql_template)}\\\`)">复制</button>
+                    </td>
+                </tr>
+            \`;
+            }).join('');
+        }
+
+        function filterDiagnoseTable() {
+            const q = document.getElementById('search-diagnose').value.toLowerCase();
+            if (!rawDiagnoseData) return;
+            const filtered = rawDiagnoseData.filter(d => 
+                (d.sql_template || '').toLowerCase().includes(q) || 
+                (d.trace_id || '').toLowerCase().includes(q) ||
+                (d.db_manager || '').toLowerCase().includes(q)
+            );
+            renderDiagnoseTable(filtered);
         }
 
         function escapeHtml(str) {
