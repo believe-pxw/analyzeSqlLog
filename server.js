@@ -435,19 +435,19 @@ function getDashboardHtml() {
             <div id="parse-time" style="font-size: 12px; color: var(--text-muted);">数据加载完成</div>
         </header>
 
-        <!-- Tab 菜单：顺序为 N+1诊所第一 -> 慢SQL -> Trace链路 -> SQL频次榜 (倒数第二) -> 概览 (倒数第一) -->
+        <!-- Tab 菜单：增加 data-tab 属性实现精准联动高亮 -->
         <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
-            <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
-            <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
-            <button class="tab-btn" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
-            <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
+            <button class="tab-btn active" data-tab="diagnose" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
+            <button class="tab-btn" data-tab="slow" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
+            <button class="tab-btn" data-tab="trace" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
+            <button class="tab-btn" data-tab="repeated" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
+            <button class="tab-btn" data-tab="overview" onclick="switchTab('overview')">📈 概览统计分析</button>
         </div>
 
         <!-- 1. N+1 诊断 Panel (默认 Active) -->
         <div id="panel-diagnose" class="panel active">
             <div class="diagnose-banner">
-                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），抓取【同一数据库事务内】重复执行 $\ge 5$ 次的 SQL。
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），精准抓取在【同一数据库事务内】重复执行 5 次及以上的 SQL 模板，定位代码循环查库问题。
             </div>
             <div class="toolbar">
                 <input type="text" id="trace-diagnose" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
@@ -605,12 +605,20 @@ function getDashboardHtml() {
             loadSlow(1);
         }
 
+        /**
+         * 强健精准的 Tab 切换高亮控制器
+         */
         function switchTab(name) {
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.getAttribute('data-tab') === name) {
+                    btn.classList.add('active');
+                }
+            });
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
             
-            event.target.classList.add('active');
-            document.getElementById('panel-' + name).classList.add('active');
+            const targetPanel = document.getElementById('panel-' + name);
+            if (targetPanel) targetPanel.classList.add('active');
         }
 
         /**
