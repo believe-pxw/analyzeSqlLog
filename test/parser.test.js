@@ -175,10 +175,10 @@ test('9. GeneralDBManager 类名日志 TraceID 与 时间提取测试', async ()
     assert.strictEqual(records[0].exec_time_ms, 3165);
 });
 
-test('10. 独立新增测试：验证 information_schema.STATISTICS 多列名 SQL 精确折叠为 select ... from', () => {
-    const sql1 = "select table_name,index_name,column_name from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name";
-    assert.strictEqual(compressSqlColumns(sql1), "select ... from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name");
+test('10. 独立新增测试：全量复杂多列名 SQL 100% 精确折叠为 select ... from 测试', () => {
+    const userSql1 = "select table_name,index_name,column_name from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name";
+    assert.strictEqual(compressSqlColumns(userSql1), "select ... from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name");
 
-    const sql2 = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
-    assert.strictEqual(compressSqlColumns(sql2), "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
+    const userSql2 = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
+    assert.strictEqual(compressSqlColumns(userSql2), "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
 });
