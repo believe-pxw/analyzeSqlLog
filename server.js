@@ -356,34 +356,9 @@ function getDashboardHtml() {
             font-size: 12.5px;
             line-height: 1.4;
         }
-
-        /* 浮动 Toast 复制提示 */
-        .toast {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #0284c7;
-            color: #ffffff;
-            padding: 8px 18px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 600;
-            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
-            z-index: 9999;
-            opacity: 0;
-            transition: opacity 0.2s, transform 0.2s;
-            pointer-events: none;
-        }
-        .toast.show {
-            opacity: 1;
-            transform: translateX(-50%) translateY(4px);
-        }
     </style>
 </head>
 <body>
-    <div class="toast" id="toast">已展开并自动选中复制完整 SQL！</div>
-
     <div class="container">
         <header>
             <div class="title">
@@ -405,7 +380,7 @@ function getDashboardHtml() {
         <!-- 1. N+1 诊断 Panel (默认 Active) -->
         <div id="panel-diagnose" class="panel active">
             <div class="diagnose-banner">
-                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），精准捕捉在【同一个数据库事务/连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板，避免 For 循环查库。
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），抓取【同一数据库事务内】重复执行 $\ge 5$ 次的 SQL。
             </div>
             <div class="toolbar">
                 <input type="text" id="trace-diagnose" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
@@ -421,7 +396,7 @@ function getDashboardHtml() {
                             <th style="width: 130px;">同一事务内循环次数</th>
                             <th style="width: 110px;">事务内浪费耗时</th>
                             <th style="width: 160px;">诊断重构建议</th>
-                            <th>点击框体展开全选并复制 SQL 模板 (默认列名缩略)</th>
+                            <th>SQL 模板 (单击: 展开/收起 | 双击: 全选)</th>
                         </tr>
                     </thead>
                     <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -448,7 +423,7 @@ function getDashboardHtml() {
                             <th style="width: 180px;">TraceID</th>
                             <th style="width: 150px;">时间</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>点击框体展开全选并复制完整 SQL (默认列名缩略)</th>
+                            <th>完整执行 SQL (单击: 展开/收起 | 双击: 全选)</th>
                         </tr>
                     </thead>
                     <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
@@ -473,7 +448,7 @@ function getDashboardHtml() {
                             <th style="width: 150px;">时间</th>
                             <th style="width: 90px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>点击框体展开全选并复制 SQL (默认列名缩略)</th>
+                            <th>执行 SQL 语句 (单击: 展开/收起 | 双击: 全选)</th>
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
@@ -501,7 +476,7 @@ function getDashboardHtml() {
                             <th style="width: 90px;">平均耗时</th>
                             <th style="width: 90px;">最大耗时</th>
                             <th style="width: 80px;">Trace 数</th>
-                            <th>点击框体展开全选并复制 SQL 模板 (默认列名缩略)</th>
+                            <th>SQL 参数化模板 (单击: 展开/收起 | 双击: 全选)</th>
                         </tr>
                     </thead>
                     <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -593,39 +568,32 @@ function getDashboardHtml() {
         }
 
         /**
-         * 极简点击交互：点击 SQL 文本框，自动展开完整列名、自动全选，并写入剪贴板
+         * 单击：展开 / 收起 SQL 列名
          */
         function handleSqlClick(div) {
             const fullSql = div.getAttribute('data-full');
-            if (!fullSql) return;
+            const briefSql = div.getAttribute('data-brief');
+            if (!fullSql || !briefSql || briefSql === fullSql) return;
 
-            // 切换为完整 SQL
-            div.innerHTML = escapeHtml(fullSql);
+            const isExpanded = div.getAttribute('data-expanded') === 'true';
+            if (isExpanded) {
+                div.innerHTML = escapeHtml(briefSql);
+                div.setAttribute('data-expanded', 'false');
+            } else {
+                div.innerHTML = escapeHtml(fullSql);
+                div.setAttribute('data-expanded', 'true');
+            }
+        }
 
-            // 自动选中文本框内部节点内容
+        /**
+         * 双击：自动选中文本框内全部 SQL 文本，复制与否完全交给用户
+         */
+        function handleSqlDblClick(div) {
             const range = document.createRange();
             range.selectNodeContents(div);
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
-
-            // 写入剪贴板并给出 Toast 浮动提示
-            navigator.clipboard.writeText(fullSql).then(() => {
-                showToast('✨ 已展开并自动全选复制完整 SQL！');
-            }).catch(() => {
-                showToast('✨ 已展开并选中 SQL！');
-            });
-        }
-
-        let toastTimer = null;
-        function showToast(msg) {
-            const toast = document.getElementById('toast');
-            toast.innerText = msg;
-            toast.classList.add('show');
-            if (toastTimer) clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 2200);
         }
 
         async function loadRepeated(page = 1) {
@@ -666,7 +634,7 @@ function getDashboardHtml() {
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -716,7 +684,7 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -804,7 +772,7 @@ function getDashboardHtml() {
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -862,7 +830,7 @@ function getDashboardHtml() {
                     <td>\${r.total_time_ms} ms</td>
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击展开完整列名、自动全选并复制" data-full="\${escapeHtml(fullSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
