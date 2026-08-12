@@ -297,6 +297,21 @@ function getDashboardHtml() {
         th { background: #f8fafc; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
         tr:hover { background: #f1f5f9; }
 
+        .th-sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.15s, background 0.15s;
+        }
+        .th-sortable:hover {
+            color: #0284c7;
+            background: #e0f2fe;
+        }
+        .sort-icon {
+            font-size: 11px;
+            margin-left: 2px;
+            color: #0284c7;
+        }
+
         .sql-code {
             font-family: "Fira Code", Consolas, Monaco, monospace;
             background: #f8fafc;
@@ -502,16 +517,11 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 3. Trace 链路 Panel (支持三态无感切换与秒级还原日志时间) -->
+        <!-- 3. Trace 链路 Panel (工具栏零杂乱按钮，纯依靠【时间】与【耗时】表头极简点击排序) -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
                 <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="sortAndRenderTraceTable()">
-                <select id="trace-sort-select" class="page-select" style="padding: 5px 10px; font-size: 13px;" onchange="sortAndRenderTraceTable()">
-                    <option value="default">⏱️ 默认日志时间顺序</option>
-                    <option value="cost-desc">🐢 按耗时从大到小 (降序)</option>
-                    <option value="cost-asc">⚡ 按耗时从小到大 (升序)</option>
-                </select>
                 <button class="btn" onclick="loadTraceData()">搜索 Trace 链路</button>
             </div>
             <div id="trace-summary" style="margin-bottom: 8px; font-size: 13px; color: var(--accent); font-weight: 600;"></div>
@@ -520,8 +530,8 @@ function getDashboardHtml() {
                     <thead>
                         <tr>
                             <th style="width: 50px;">序号</th>
-                            <th style="width: 150px;">时间</th>
-                            <th style="width: 110px; cursor: pointer; user-select: none;" onclick="toggleTraceCostSort()" title="点击三态循环切换: 时间顺序 -> 耗时降序 -> 耗时升序 -> 时间顺序">耗时 (ms) ↕</th>
+                            <th style="width: 160px;" class="th-sortable" onclick="sortTraceBy('time')" title="点击切换时间排序 (升序 / 降序)">时间 <span id="sort-icon-time" class="sort-icon">▲</span></th>
+                            <th style="width: 110px;" class="th-sortable" onclick="sortTraceBy('cost')" title="点击切换耗时排序 (降序 / 升序)">耗时 (ms) <span id="sort-icon-cost" class="sort-icon">↕</span></th>
                             <th style="width: 80px;">影响行数</th>
                             <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
@@ -588,6 +598,9 @@ function getDashboardHtml() {
         let totalSlowCount = 0;
 
         let currentRightClickedDiv = null;
+
+        // Trace 当前排序模式: 'time-asc' (默认时间升序) | 'time-desc' (时间降序) | 'cost-desc' (耗时降序) | 'cost-asc' (耗时升序)
+        let traceSortMode = 'time-asc';
 
         async function init() {
             try {
@@ -857,21 +870,49 @@ function getDashboardHtml() {
         }
 
         /**
-         * Trace 链路耗时排序与检索过滤逻辑（支持精确还原默认日志时间顺序）
+         * 表头极简点击排序控制逻辑
+         */
+        function sortTraceBy(field) {
+            if (field === 'time') {
+                if (traceSortMode === 'time-asc') {
+                    traceSortMode = 'time-desc';
+                } else {
+                    traceSortMode = 'time-asc';
+                }
+            } else if (field === 'cost') {
+                if (traceSortMode === 'cost-desc') {
+                    traceSortMode = 'cost-asc';
+                } else {
+                    traceSortMode = 'cost-desc';
+                }
+            }
+            sortAndRenderTraceTable();
+        }
+
+        /**
+         * Trace 链路按表头高亮与数据实时排序
          */
         function sortAndRenderTraceTable() {
             if (!rawTraceData) return;
-            const sortMode = document.getElementById('trace-sort-select').value;
             const q = document.getElementById('search-trace-sql').value.toLowerCase();
 
             let sorted = [...rawTraceData];
-            if (sortMode === 'cost-desc') {
-                sorted.sort((a, b) => (b.exec_time_ms || 0) - (a.exec_time_ms || 0));
-            } else if (sortMode === 'cost-asc') {
-                sorted.sort((a, b) => (a.exec_time_ms || 0) - (b.exec_time_ms || 0));
-            } else {
-                // 100% 准确还原最初日志时间自然顺序
+            if (traceSortMode === 'time-asc') {
                 sorted.sort((a, b) => (a._origIndex || 0) - (b._origIndex || 0));
+                document.getElementById('sort-icon-time').innerText = '▲';
+                document.getElementById('sort-icon-cost').innerText = '↕';
+            } else if (traceSortMode === 'time-desc') {
+                sorted.sort((a, b) => (b._origIndex || 0) - (a._origIndex || 0));
+                document.getElementById('sort-icon-time').innerText = '▼';
+                document.getElementById('sort-icon-cost').innerText = '↕';
+            } else if (traceSortMode === 'cost-desc') {
+                sorted.sort((a, b) => (b.exec_time_ms || 0) - (a.exec_time_ms || 0));
+                document.getElementById('sort-icon-time').innerText = '↕';
+                document.getElementById('sort-icon-cost').innerText = '▼';
+            } else if (traceSortMode === 'cost-asc') {
+                sorted.sort((a, b) => (a.exec_time_ms || 0) - (b.exec_time_ms || 0));
+                document.getElementById('sort-icon-time').innerText = '↕';
+                document.getElementById('sort-icon-cost').innerText = '▲';
             }
 
             if (q) {
@@ -882,21 +923,6 @@ function getDashboardHtml() {
             }
 
             renderTraceTable(sorted);
-        }
-
-        /**
-         * 表头三态优雅轮转切换：日志时间顺序 -> 耗时降序 -> 耗时升序 -> 日志时间顺序
-         */
-        function toggleTraceCostSort() {
-            const sel = document.getElementById('trace-sort-select');
-            if (sel.value === 'default') {
-                sel.value = 'cost-desc';
-            } else if (sel.value === 'cost-desc') {
-                sel.value = 'cost-asc';
-            } else {
-                sel.value = 'default';
-            }
-            sortAndRenderTraceTable();
         }
 
         function renderTraceTable(data) {

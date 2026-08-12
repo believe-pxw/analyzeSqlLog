@@ -211,16 +211,39 @@ test('12. 独立新增测试：Trace 链路从耗时排序无感恢复原始日�
         { id: 3, exec_time_ms: 50, full_sql: 'SQL 3' }
     ];
 
-    // 标记原始天然索引
     const mapped = rawData.map((item, idx) => ({ ...item, _origIndex: idx }));
 
-    // 耗时降序
     const desc = [...mapped].sort((a, b) => b.exec_time_ms - a.exec_time_ms);
     assert.strictEqual(desc[0].full_sql, 'SQL 2');
 
-    // 切回默认：恢复天然日志时间顺序
     const restored = [...desc].sort((a, b) => a._origIndex - b._origIndex);
     assert.strictEqual(restored[0].full_sql, 'SQL 1');
     assert.strictEqual(restored[1].full_sql, 'SQL 2');
     assert.strictEqual(restored[2].full_sql, 'SQL 3');
+});
+
+test('13. 独立新增测试：【时间列】与【耗时列】经典表头交互双向排序断言', () => {
+    const mapped = [
+        { id: 10, exec_time_ms: 5, log_time: '2026-08-12 10:00:00', _origIndex: 0 },
+        { id: 11, exec_time_ms: 200, log_time: '2026-08-12 10:00:01', _origIndex: 1 },
+        { id: 12, exec_time_ms: 50, log_time: '2026-08-12 10:00:02', _origIndex: 2 }
+    ];
+
+    // 时间降序
+    const timeDesc = [...mapped].sort((a, b) => b._origIndex - a._origIndex);
+    assert.strictEqual(timeDesc[0].id, 12);
+    assert.strictEqual(timeDesc[2].id, 10);
+
+    // 时间升序
+    const timeAsc = [...timeDesc].sort((a, b) => a._origIndex - b._origIndex);
+    assert.strictEqual(timeAsc[0].id, 10);
+    assert.strictEqual(timeAsc[2].id, 12);
+
+    // 耗时降序
+    const costDesc = [...mapped].sort((a, b) => b.exec_time_ms - a.exec_time_ms);
+    assert.strictEqual(costDesc[0].id, 11);
+
+    // 耗时升序
+    const costAsc = [...mapped].sort((a, b) => a.exec_time_ms - b.exec_time_ms);
+    assert.strictEqual(costAsc[0].id, 10);
 });
