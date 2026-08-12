@@ -301,7 +301,8 @@ function getDashboardHtml() {
             line-height: 1.35;
             cursor: pointer;
             transition: border-color 0.15s, background 0.15s;
-            user-select: text;
+            user-select: all; /* 浏览器原生 0 延迟瞬间全选 */
+            -webkit-user-select: all;
         }
         .sql-code:hover {
             border-color: #0284c7;
@@ -396,7 +397,7 @@ function getDashboardHtml() {
                             <th style="width: 130px;">同一事务内循环次数</th>
                             <th style="width: 110px;">事务内浪费耗时</th>
                             <th style="width: 160px;">诊断重构建议</th>
-                            <th>SQL 模板 (单击: 展开/收起 | 双击: 全选)</th>
+                            <th>SQL 模板 (点击 0ms 秒开展开/收起，自动原生全选)</th>
                         </tr>
                     </thead>
                     <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -423,7 +424,7 @@ function getDashboardHtml() {
                             <th style="width: 180px;">TraceID</th>
                             <th style="width: 150px;">时间</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>完整执行 SQL (单击: 展开/收起 | 双击: 全选)</th>
+                            <th>完整执行 SQL (点击 0ms 秒开展开/收起，自动原生全选)</th>
                         </tr>
                     </thead>
                     <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
@@ -448,7 +449,7 @@ function getDashboardHtml() {
                             <th style="width: 150px;">时间</th>
                             <th style="width: 90px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>执行 SQL 语句 (单击: 展开/收起 | 双击: 全选)</th>
+                            <th>执行 SQL 语句 (点击 0ms 秒开展开/收起，自动原生全选)</th>
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
@@ -476,7 +477,7 @@ function getDashboardHtml() {
                             <th style="width: 90px;">平均耗时</th>
                             <th style="width: 90px;">最大耗时</th>
                             <th style="width: 80px;">Trace 数</th>
-                            <th>SQL 参数化模板 (单击: 展开/收起 | 双击: 全选)</th>
+                            <th>SQL 参数化模板 (点击 0ms 秒开展开/收起，自动原生全选)</th>
                         </tr>
                     </thead>
                     <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -511,8 +512,6 @@ function getDashboardHtml() {
         let curSlowPage = 1;
         let curSlowPageSize = 20;
         let totalSlowCount = 0;
-
-        let sqlClickTimer = null;
 
         async function init() {
             try {
@@ -558,52 +557,33 @@ function getDashboardHtml() {
             const fromIdx = lower.indexOf('from');
 
             if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-                const selectHead = str.substring(0, selectIdx + 6);
+                const selectPart = str.substring(0, selectIdx + 6);
                 const cols = str.substring(selectIdx + 6, fromIdx);
                 const fromPart = str.substring(fromIdx);
 
                 if (cols.includes(',') || cols.trim().length > 15) {
-                    return selectHead + ' ... ' + fromPart.trim();
+                    return selectPart + ' ... ' + fromPart.trim();
                 }
             }
             return str;
         }
 
         /**
-         * 单击：延时 220ms 触发展开/收起，避免触发双击防冲突
+         * 0ms 瞬间切换：无任何防抖延时，单击即刻毫秒级展开/收起
          */
         function handleSqlClick(div) {
-            if (sqlClickTimer) clearTimeout(sqlClickTimer);
-            sqlClickTimer = setTimeout(() => {
-                const fullSql = div.getAttribute('data-full');
-                const briefSql = div.getAttribute('data-brief');
-                if (!fullSql || !briefSql || briefSql === fullSql) return;
+            const fullSql = div.getAttribute('data-full');
+            const briefSql = div.getAttribute('data-brief');
+            if (!fullSql || !briefSql || briefSql === fullSql) return;
 
-                const isExpanded = div.getAttribute('data-expanded') === 'true';
-                if (isExpanded) {
-                    div.innerHTML = escapeHtml(briefSql);
-                    div.setAttribute('data-expanded', 'false');
-                } else {
-                    div.innerHTML = escapeHtml(fullSql);
-                    div.setAttribute('data-expanded', 'true');
-                }
-            }, 220);
-        }
-
-        /**
-         * 双击：立刻取消单击的延时定时器，完美解决单双击冲突，仅执行全选中文字！
-         */
-        function handleSqlDblClick(div) {
-            if (sqlClickTimer) {
-                clearTimeout(sqlClickTimer);
-                sqlClickTimer = null;
+            const isExpanded = div.getAttribute('data-expanded') === 'true';
+            if (isExpanded) {
+                div.innerHTML = escapeHtml(briefSql);
+                div.setAttribute('data-expanded', 'false');
+            } else {
+                div.innerHTML = escapeHtml(fullSql);
+                div.setAttribute('data-expanded', 'true');
             }
-
-            const range = document.createRange();
-            range.selectNodeContents(div);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
         }
 
         async function loadRepeated(page = 1) {
@@ -644,7 +624,7 @@ function getDashboardHtml() {
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -694,7 +674,7 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -782,7 +762,7 @@ function getDashboardHtml() {
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -840,7 +820,7 @@ function getDashboardHtml() {
                     <td>\${r.total_time_ms} ms</td>
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" ondblclick="handleSqlDblClick(this)" title="单击: 展开/收起完整列名 | 双击: 选中文本" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
