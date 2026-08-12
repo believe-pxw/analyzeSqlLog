@@ -6,12 +6,18 @@
 
 ## 🚀 团队快速安装与使用
 
+### ⚙️ 环境要求
+
+- **Node.js**：建议使用 **Node.js 24** 或更高版本（推荐 v24+）
+
+---
+
 ### 1. 🌟【最推荐·团队内部】直接通过 GitHub 全局安装 (无需发布 npm)
 
 团队成员只要电脑安装了 Node.js，**无需发布到 npm**，在终端运行以下命令即可完成安装：
 
 ```bash
-npm install -g git+https://github.com/believe-pxw/analyzeSqlLog.git
+npm install -g git+https://github.com/believe-pxw/analyzeSqlLog.git --allow-git=all --allow-scripts=duckdb
 ```
 
 **使用方法**：
@@ -27,17 +33,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 2. ⚡【零安装·即用即走】使用 `npx` 直接运行
-
-无需全局安装，在命令行直接运行：
-
-```bash
-npx git+https://github.com/believe-pxw/analyzeSqlLog.git .
-```
-
----
-
-### 3. 📦 开发者源码本地运行
+### 2. 📦 开发者源码本地运行
 
 ```bash
 # 克隆仓库
