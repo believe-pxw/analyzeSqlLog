@@ -7,16 +7,13 @@ class SqlLogDatabase {
      * @param {string} dbPath - 数据库路径 (默认使用纯内存模式 :memory:)
      */
     constructor(dbPath = ':memory:') {
-        // 如果根目录下存在以往残留的 sqllogs.duckdb 文件，尝试删除
         if (dbPath === ':memory:') {
             const diskDb = path.join(process.cwd(), 'sqllogs.duckdb');
             const diskWal = path.join(process.cwd(), 'sqllogs.duckdb.wal');
             try {
                 if (fs.existsSync(diskDb)) fs.unlinkSync(diskDb);
                 if (fs.existsSync(diskWal)) fs.unlinkSync(diskWal);
-            } catch (e) {
-                // 忽略删文件暂存锁
-            }
+            } catch (e) {}
         }
 
         this.dbPath = dbPath;
@@ -37,7 +34,7 @@ class SqlLogDatabase {
     }
 
     /**
-     * 初始化内存 SQL 数据库表结构与索引
+     * 初始化内存 SQL 数据库表结构
      */
     async initSchema() {
         const createTableSql = `
@@ -180,7 +177,7 @@ class SqlLogDatabase {
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
-            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, sql_template, full_sql
+            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
             FROM sqllogs
             ${whereClause}
             ORDER BY exec_time_ms DESC
@@ -196,7 +193,7 @@ class SqlLogDatabase {
     async getByTraceId(traceId) {
         if (!traceId) return [];
         const sql = `
-            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, sql_template, full_sql
+            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
             FROM sqllogs
             WHERE trace_id = ?
             ORDER BY id ASC
@@ -205,18 +202,19 @@ class SqlLogDatabase {
     }
 
     /**
-     * 💡 N+1 疑难诊断：找出同一 TraceID 内重复调用的 SQL 模板 (次数 >= 5)
+     * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
      */
     async getDiagnostics() {
         const sql = `
             SELECT 
                 trace_id,
+                db_manager,
                 sql_template,
                 COUNT(*) as repeat_count,
                 SUM(exec_time_ms) as total_time_ms
             FROM sqllogs
-            WHERE trace_id != '-'
-            GROUP BY trace_id, sql_template
+            WHERE trace_id != '-' AND db_manager != ''
+            GROUP BY trace_id, db_manager, sql_template
             HAVING COUNT(*) >= 5
             ORDER BY repeat_count DESC, total_time_ms DESC
             LIMIT 20

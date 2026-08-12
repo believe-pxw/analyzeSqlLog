@@ -372,12 +372,12 @@ function getDashboardHtml() {
             font-size: 13px;
         }
         .diagnose-banner {
-            background: #fef2f2;
-            border: 1px solid #fecaca;
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
             border-radius: 8px;
             padding: 12px 16px;
             margin-bottom: 16px;
-            color: #991b1b;
+            color: #166534;
             font-size: 13.5px;
             line-height: 1.6;
         }
@@ -398,7 +398,7 @@ function getDashboardHtml() {
             <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
             <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
             <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
-            <button class="tab-btn" onclick="switchTab('diagnose')">💡 N+1 循环调用诊所</button>
+            <button class="tab-btn" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
         </div>
 
         <!-- 频次榜 Panel -->
@@ -497,23 +497,24 @@ function getDashboardHtml() {
         <!-- N+1 诊断 Panel -->
         <div id="panel-diagnose" class="panel">
             <div class="diagnose-banner">
-                <strong>💡 什么是 N+1 循环调用缺陷？</strong><br>
-                与【SQL 频次榜】统计全系统总次数不同，<strong>N+1 诊所专查【单个请求/事务内 (Single Trace)】的代码缺陷</strong>！<br>
-                如果一个用户请求触发了相同的 SQL 被<strong>循环调用了 5 次以上</strong>，通常意味着代码在 <code>for</code> 循环中单条查询，建议修改为批量 <code>IN (...)</code> 查询或增加二级缓存。
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong><br>
+                基于日志中 <code>dbManager</code> 的内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），**精确捕捉在【同一个数据库事务 / 连接上下文】内部循环执行 $\ge 5$ 次的 SQL 模板**。<br>
+                在同一事务中反复执行相同 SQL 模板，是后端代码写了 <code>for</code> 循环查库的硬核铁证！
             </div>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
                             <th style="width: 60px;">#</th>
-                            <th style="width: 220px;">出问题的 TraceID</th>
-                            <th style="width: 140px;">单请求内循环次数</th>
-                            <th style="width: 120px;">单请求内浪费耗时</th>
-                            <th style="width: 200px;">诊断建议</th>
-                            <th>疑似写在 For 循环体内的 SQL 模板</th>
+                            <th style="width: 220px;">TraceID</th>
+                            <th style="width: 200px;">dbManager 事务句柄</th>
+                            <th style="width: 140px;">同一事务内循环次数</th>
+                            <th style="width: 120px;">事务内浪费耗时</th>
+                            <th style="width: 180px;">诊断重构建议</th>
+                            <th>在 For 循环体中反复执行的 SQL 模板</th>
                         </tr>
                     </thead>
-                    <tbody id="diagnose-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
+                    <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -825,22 +826,26 @@ function getDashboardHtml() {
             if (json.success) {
                 const tbody = document.getElementById('diagnose-tbody');
                 if (json.data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到单次请求 (Single Trace) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
                     return;
                 }
                 tbody.innerHTML = json.data.map((r, i) => {
                     const isSevere = r.repeat_count >= 20;
                     const tagClass = isSevere ? 'tag-slow' : 'tag-freq';
                     const tagText = isSevere ? '🔥 严重 N+1 (' + r.repeat_count + '次)' : '⚠️ 疑似 N+1 (' + r.repeat_count + '次)';
-                    const suggestion = isSevere ? '建议改为 IN(...) 批量查询' : '建议增加二级缓存/合并';
+                    const suggestion = isSevere ? '改写为 IN(...) 批量查询' : '增加二级缓存/批处理';
+                    
+                    // 简化 db_manager 展现，提取后半段的 类名@hashcode
+                    const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
 
                     return \`
                     <tr>
                         <td>\${i + 1}</td>
                         <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
+                        <td><code style="background: #f1f5f9; padding: 3px 6px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
                         <td><span class="\${tagClass}">\${tagText}</span></td>
                         <td>\${r.total_time_ms} ms</td>
-                        <td style="color: #0284c7; font-weight: 500;">\${suggestion}</td>
+                        <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                         <td>
                             <div class="sql-code">\${escapeHtml(r.sql_template)}</div>
                             <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.sql_template)}\\\`)">复制</button>
