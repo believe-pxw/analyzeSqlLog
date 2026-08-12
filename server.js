@@ -301,8 +301,7 @@ function getDashboardHtml() {
             line-height: 1.35;
             cursor: pointer;
             transition: border-color 0.15s, background 0.15s;
-            user-select: all; /* 浏览器原生 0 延迟瞬间全选 */
-            -webkit-user-select: all;
+            user-select: text;
         }
         .sql-code:hover {
             border-color: #0284c7;
@@ -357,9 +356,76 @@ function getDashboardHtml() {
             font-size: 12.5px;
             line-height: 1.4;
         }
+
+        /* 桌面级自定义右键菜单 Context Menu */
+        .context-menu {
+            position: fixed;
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            padding: 5px;
+            display: none;
+            z-index: 99999;
+            min-width: 220px;
+            font-size: 13px;
+        }
+        .context-menu-item {
+            padding: 8px 12px;
+            color: #1e293b;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s, color 0.15s;
+        }
+        .context-menu-item:hover {
+            background: #e0f2fe;
+            color: #0284c7;
+        }
+        .context-menu-divider {
+            height: 1px;
+            background: #e2e8f0;
+            margin: 4px 0;
+        }
+
+        /* 浮动 Toast 复制提示 */
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0284c7;
+            color: #ffffff;
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+            z-index: 999999;
+            opacity: 0;
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(4px);
+        }
     </style>
 </head>
 <body>
+    <div class="toast" id="toast">已成功复制到剪贴板！</div>
+
+    <!-- 桌面级极简右键菜单 -->
+    <div id="custom-context-menu" class="context-menu">
+        <div class="context-menu-item" onclick="execContextMenuAction('copy-full')">📋 复制完整 SQL (含列名)</div>
+        <div class="context-menu-item" onclick="execContextMenuAction('copy-brief')">📄 复制精简模板 (select...)</div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="execContextMenuAction('toggle-expand')">🔍 切换 展开 / 收起 列名</div>
+    </div>
+
     <div class="container">
         <header>
             <div class="title">
@@ -397,7 +463,7 @@ function getDashboardHtml() {
                             <th style="width: 130px;">同一事务内循环次数</th>
                             <th style="width: 110px;">事务内浪费耗时</th>
                             <th style="width: 160px;">诊断重构建议</th>
-                            <th>SQL 模板 (点击 0ms 秒开展开/收起，自动原生全选)</th>
+                            <th>SQL 模板 (左键: 展开/收起 | 右键: 复制完整/模板)</th>
                         </tr>
                     </thead>
                     <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -424,7 +490,7 @@ function getDashboardHtml() {
                             <th style="width: 180px;">TraceID</th>
                             <th style="width: 150px;">时间</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>完整执行 SQL (点击 0ms 秒开展开/收起，自动原生全选)</th>
+                            <th>完整执行 SQL (左键: 展开/收起 | 右键: 复制完整/模板)</th>
                         </tr>
                     </thead>
                     <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
@@ -449,7 +515,7 @@ function getDashboardHtml() {
                             <th style="width: 150px;">时间</th>
                             <th style="width: 90px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
-                            <th>执行 SQL 语句 (点击 0ms 秒开展开/收起，自动原生全选)</th>
+                            <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整/模板)</th>
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
@@ -477,7 +543,7 @@ function getDashboardHtml() {
                             <th style="width: 90px;">平均耗时</th>
                             <th style="width: 90px;">最大耗时</th>
                             <th style="width: 80px;">Trace 数</th>
-                            <th>SQL 参数化模板 (点击 0ms 秒开展开/收起，自动原生全选)</th>
+                            <th>SQL 参数化模板 (左键: 展开/收起 | 右键: 复制完整/模板)</th>
                         </tr>
                     </thead>
                     <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
@@ -512,6 +578,8 @@ function getDashboardHtml() {
         let curSlowPage = 1;
         let curSlowPageSize = 20;
         let totalSlowCount = 0;
+
+        let currentRightClickedDiv = null;
 
         async function init() {
             try {
@@ -569,7 +637,7 @@ function getDashboardHtml() {
         }
 
         /**
-         * 0ms 瞬间切换：无任何防抖延时，单击即刻毫秒级展开/收起
+         * 左键：0ms 瞬间展开 / 收起
          */
         function handleSqlClick(div) {
             const fullSql = div.getAttribute('data-full');
@@ -585,6 +653,72 @@ function getDashboardHtml() {
                 div.setAttribute('data-expanded', 'true');
             }
         }
+
+        /**
+         * 右键：弹出极简自定义菜单
+         */
+        function handleSqlContextMenu(e, div) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            currentRightClickedDiv = div;
+            const menu = document.getElementById('custom-context-menu');
+            
+            let x = e.clientX;
+            let y = e.clientY;
+
+            menu.style.display = 'block';
+            const menuWidth = menu.offsetWidth;
+            const menuHeight = menu.offsetHeight;
+
+            if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 8;
+            if (y + menuHeight > window.innerHeight) y = window.innerHeight - menuHeight - 8;
+
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+        }
+
+        function execContextMenuAction(action) {
+            if (!currentRightClickedDiv) return;
+            const fullSql = currentRightClickedDiv.getAttribute('data-full') || '';
+            const briefSql = currentRightClickedDiv.getAttribute('data-brief') || '';
+
+            if (action === 'copy-full') {
+                navigator.clipboard.writeText(fullSql).then(() => {
+                    showToast('📋 已复制完整 SQL 至剪贴板！');
+                }).catch(() => {
+                    showToast('复制失败');
+                });
+            } else if (action === 'copy-brief') {
+                navigator.clipboard.writeText(briefSql).then(() => {
+                    showToast('📄 已复制精简 SQL 模板至剪贴板！');
+                }).catch(() => {
+                    showToast('复制失败');
+                });
+            } else if (action === 'toggle-expand') {
+                handleSqlClick(currentRightClickedDiv);
+            }
+            hideContextMenu();
+        }
+
+        function hideContextMenu() {
+            const menu = document.getElementById('custom-context-menu');
+            if (menu) menu.style.display = 'none';
+        }
+
+        let toastTimer = null;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2000);
+        }
+
+        document.addEventListener('click', hideContextMenu);
+        document.addEventListener('scroll', hideContextMenu);
 
         async function loadRepeated(page = 1) {
             curRepeatedPage = page;
@@ -624,7 +758,7 @@ function getDashboardHtml() {
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 极简复制菜单" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -674,7 +808,7 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 极简复制菜单" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -762,7 +896,7 @@ function getDashboardHtml() {
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 极简复制菜单" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
@@ -820,7 +954,7 @@ function getDashboardHtml() {
                     <td>\${r.total_time_ms} ms</td>
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
-                        <div class="sql-code" onclick="handleSqlClick(this)" title="点击 0ms 秒开展开/收起，原生自动全选" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 极简复制菜单" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                 </tr>
             \`;
