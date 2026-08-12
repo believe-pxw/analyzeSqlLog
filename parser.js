@@ -221,21 +221,34 @@ async function parseLogFile(filePath, onRecord) {
 }
 
 /**
- * 遍历扫描指定目录/文件列表 (专一只扫描 info 和 error 文件)
+ * 遍历扫描指定目录/文件列表 (支持递归深度遍历所有 .log 与 .txt 日志文件)
  */
 async function parseLogs(targetPath, onRecord) {
     let files = [];
-    const stat = fs.statSync(targetPath);
-    if (stat.isDirectory()) {
-        const fileNames = fs.readdirSync(targetPath);
-        for (const f of fileNames) {
-            const isInfoOrError = /info|error/i.test(f);
-            if ((f.endsWith('.log') || f.endsWith('.txt')) && isInfoOrError) {
-                files.push(path.join(targetPath, f));
+
+    function collectFiles(dirOrFilePath) {
+        const stat = fs.statSync(dirOrFilePath);
+        if (stat.isDirectory()) {
+            const entries = fs.readdirSync(dirOrFilePath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.name.startsWith('.')) continue; // 忽略隐藏文件/目录
+                const fullPath = path.join(dirOrFilePath, entry.name);
+                if (entry.isDirectory()) {
+                    collectFiles(fullPath);
+                } else if (entry.isFile()) {
+                    const ext = path.extname(entry.name).toLowerCase();
+                    if (ext === '.log' || ext === '.txt') {
+                        files.push(fullPath);
+                    }
+                }
             }
+        } else if (stat.isFile()) {
+            files.push(dirOrFilePath);
         }
-    } else {
-        files.push(targetPath);
+    }
+
+    if (fs.existsSync(targetPath)) {
+        collectFiles(targetPath);
     }
 
     let grandTotalLines = 0;

@@ -87,7 +87,7 @@ test('4. DuckDB 内存聚合与后端分页测试', async () => {
     assert.strictEqual(slowPage1.rows[0].exec_time_ms, 100);
 });
 
-test('5. parseLogs 只扫描文件名包含 info 或 error 的日志文件测试', async () => {
+test('5. parseLogs 包含 sqltime 等全量 .log/.txt 日志文件扫描测试', async () => {
     const tempDir = path.join(__dirname, 'test_logs_dir');
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
 
@@ -101,7 +101,7 @@ test('5. parseLogs 只扫描文件名包含 info 或 error 的日志文件测试
 
     const res = await parseLogs(tempDir, () => {});
 
-    assert.strictEqual(res.totalFiles, 2);
+    assert.strictEqual(res.totalFiles, 3);
 
     fs.unlinkSync(file1);
     fs.unlinkSync(file2);
@@ -246,4 +246,27 @@ test('13. 独立新增测试：【时间列】与【耗时列】经典表头交�
     // 耗时升序
     const costAsc = [...mapped].sort((a, b) => a.exec_time_ms - b.exec_time_ms);
     assert.strictEqual(costAsc[0].id, 10);
+});
+
+test('14. 独立新增测试：parseLogs 递归深度扫描层级子目录日志文件断言测试', async () => {
+    const tempDir = path.join(__dirname, 'test_recursive_logs_dir');
+    const subDir = path.join(tempDir, '2026-07');
+    if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
+
+    const file1 = path.join(tempDir, 'root.log');
+    const file2 = path.join(subDir, 'sub.log');
+
+    fs.writeFileSync(file1, '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-r1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[1ms]\n>SQL语句:[select 100]', 'utf-8');
+    fs.writeFileSync(file2, '2026-08-12 10:00:01.000 INFO [DevNode] [] [] [] [t-r2] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[2ms]\n>SQL语句:[select 200]', 'utf-8');
+
+    const records = [];
+    const res = await parseLogs(tempDir, (r) => records.push(r));
+
+    assert.strictEqual(res.totalFiles, 2);
+    assert.strictEqual(records.length, 2);
+
+    fs.unlinkSync(file1);
+    fs.unlinkSync(file2);
+    fs.rmdirSync(subDir);
+    fs.rmdirSync(tempDir);
 });
