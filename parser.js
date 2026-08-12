@@ -278,8 +278,10 @@ async function parseLogs(targetPath, onRecord) {
         return { totalFiles: 0, totalLines: 0, totalRecords: 0 };
     }
 
-    const cpuCount = os.cpus() ? os.cpus().length : 4;
-    const maxWorkers = Math.min(cpuCount, files.length);
+    // 💡 黄金并发度策略：永远预留 1~2 个核心给 macOS 系统与 Node.js 主线程 (DuckDB 写入)，并发上限封顶为 6 线程
+    const availableCpus = os.cpus() ? os.cpus().length : 4;
+    const maxOptimalWorkers = Math.max(1, Math.min(availableCpus - 1, 6));
+    const maxWorkers = Math.min(maxOptimalWorkers, files.length);
 
     // 单文件或 Worker 内部或单核设备降级处理
     if (files.length <= 1 || !isMainThread || maxWorkers <= 1) {
