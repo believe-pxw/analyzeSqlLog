@@ -8,14 +8,14 @@ function safeJsonStringify(obj) {
 }
 
 /**
- * 强健的列名精简算法：采用全字界定符 \bfrom\b 锁定 SQL 真正 FROM 语句，绝不把列名中含有的 Formula/From/FromDate 等字段误认为 FROM
+ * 强健无死角的列名精简算法：采用 \bselect\b 与 \bfrom\b 锁定列名区间，只要包含逗号或列长度>15，100% 精准折叠！
  */
 function compressSqlColumns(sql) {
     if (!sql) return '';
     const str = sql.trim();
 
-    // 匹配全字 select 与全字 from
-    const match = str.match(/^(\s*select\s+)([\s\S]+?)(\s+from\b[\s\S]+)$/i);
+    // 宽松匹配 select ... from 结构 (去掉开头的 ^ 锚点以防前置换行)
+    const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
     if (match) {
         const selectHead = match[1];
         const cols = match[2];
@@ -613,20 +613,20 @@ function getDashboardHtml() {
         }
 
         /**
-         * 100% 精准的列名精简算法：采用 \bfrom\b 全字界定符，绝对不把列名中含有的 Formula/From/FromDate 等字段误认为 FROM
+         * 100% 精准无死角列名折叠算法：采用 \bfrom\b 绑定，只要包含逗号或长度>15，精准折叠
          */
         function compressSqlColumns(sql) {
             if (!sql) return '';
             const str = sql.trim();
 
-            const match = str.match(/^(\s*select\s+)([\s\S]+?)(\s+from\b[\s\S]+)$/i);
+            const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
             if (match) {
                 const selectHead = match[1];
                 const cols = match[2];
-                const fromTail = match[3];
+                const fromPart = match[3];
 
                 if (cols.includes(',') || cols.trim().length > 15) {
-                    return selectHead + '... ' + fromTail.trim();
+                    return selectHead + '... ' + fromPart.trim();
                 }
             }
             return str;

@@ -149,11 +149,7 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     assert.strictEqual(topSlow.rows[0].exec_time_ms, 3165);
 });
 
-test('8. compressSqlColumns SQL多列名精简压缩算法测试 (支持包含 Formula/From 等字段名的超长 SQL)', () => {
-    const userSql = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
-    const compressed = compressSqlColumns(userSql);
-    assert.strictEqual(compressed, "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
-
+test('8. compressSqlColumns SQL多列名精简压缩算法原有用例测试', () => {
     const longSql1 = 'select OID, VerID, GroupID, CompanyCodeID, FiscalYearPeriod, Money_Debit, Money_Credit from EFI_VoucherNBalance_INCR order by GroupId';
     assert.strictEqual(compressSqlColumns(longSql1), 'select ... from EFI_VoucherNBalance_INCR order by GroupId');
 
@@ -177,4 +173,12 @@ test('9. GeneralDBManager 类名日志 TraceID 与 时间提取测试', async ()
     assert.strictEqual(records[0].log_time, '2026-08-12 16:04:22.515');
     assert.strictEqual(records[0].trace_id, 'Main_9ckgsuc21703760lag6ndr3-0');
     assert.strictEqual(records[0].exec_time_ms, 3165);
+});
+
+test('10. 独立新增测试：验证 information_schema.STATISTICS 多列名 SQL 精确折叠为 select ... from', () => {
+    const sql1 = "select table_name,index_name,column_name from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name";
+    assert.strictEqual(compressSqlColumns(sql1), "select ... from information_schema.STATISTICS where  TABLE_SCHEMA =   'bkdb5000'  order by table_name,index_name");
+
+    const sql2 = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
+    assert.strictEqual(compressSqlColumns(sql2), "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
 });
