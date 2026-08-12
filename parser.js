@@ -3,17 +3,20 @@ const readline = require('readline');
 const path = require('path');
 
 /**
- * 解析时间耗时字符串 (如 "0ms", "1.5s", "2m") 转为毫秒数值
+ * 解析时间耗时字符串 (如 "0ms", "3165ms/TimeCostLevel100ms200ms500ms1s2s", "1.5s/TimeCostLevel...")
+ * 自动识别并截取 '/' 前面的真正耗时数值
  */
 function parseTimeToMs(timeStr) {
     if (!timeStr) return 0;
-    const match = timeStr.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
+    // 取 '/' 左侧的核心耗时部分
+    const cleanStr = timeStr.trim().split('/')[0].trim();
+    const match = cleanStr.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
     if (!match) return 0;
     const val = parseFloat(match[1]);
     const unit = (match[2] || 'ms').toLowerCase();
-    if (unit === 's') return val * 1000;
-    if (unit === 'm') return val * 60000;
-    return val;
+    if (unit === 's') return Math.round(val * 1000);
+    if (unit === 'm') return Math.round(val * 60000);
+    return Math.round(val);
 }
 
 /**
@@ -226,7 +229,6 @@ async function parseLogs(targetPath, onRecord) {
     if (stat.isDirectory()) {
         const fileNames = fs.readdirSync(targetPath);
         for (const f of fileNames) {
-            // 严格要求：只扫描包含 info 或 error 的日志文件 (忽略大小写，例如 DevNode-server-info.log, DevNode-server-error.log)
             const isInfoOrError = /info|error/i.test(f);
             if ((f.endsWith('.log') || f.endsWith('.txt')) && isInfoOrError) {
                 files.push(path.join(targetPath, f));

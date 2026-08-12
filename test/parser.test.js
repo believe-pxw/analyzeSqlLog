@@ -6,11 +6,14 @@ const { parseLogs, parseLogFile, parseTimeToMs, cleanSqlText } = require('../par
 const SqlLogDatabase = require('../db');
 const { compressSqlColumns } = require('../server');
 
-test('1. parseTimeToMs 耗时转换测试', () => {
+test('1. parseTimeToMs 耗时转换测试 (支持 TimeCostLevel 扩展格式)', () => {
     assert.strictEqual(parseTimeToMs('0ms'), 0);
     assert.strictEqual(parseTimeToMs('12ms'), 12);
     assert.strictEqual(parseTimeToMs('1.5s'), 1500);
     assert.strictEqual(parseTimeToMs('2m'), 120000);
+    assert.strictEqual(parseTimeToMs('3165ms/TimeCostLevel100ms200ms500ms1s2s'), 3165);
+    assert.strictEqual(parseTimeToMs('920ms/TimeCostLevel100ms200ms500ms'), 920);
+    assert.strictEqual(parseTimeToMs('428ms/TimeCostLevel100ms200ms'), 428);
 });
 
 test('2. cleanSqlText 清理换行符 > 前缀与尾部 ] 字符测试', () => {
@@ -134,7 +137,9 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
 
     assert.strictEqual(Number(summary.total_sqls), 2749);
     assert.strictEqual(Number(summary.total_traces), 205);
-    assert.strictEqual(summary.max_exec_time_ms, 100);
+    
+    // 关键修正：最高慢 SQL 耗时准确解析为 3165 ms！
+    assert.strictEqual(summary.max_exec_time_ms, 3165);
 
     assert.strictEqual(topRepeated.rows[0].sql_template, 'update `SYS_Lock` set Slock=1 where UniqueKey=?');
     assert.strictEqual(Number(topRepeated.rows[0].count), 540);
@@ -142,7 +147,8 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     assert.strictEqual(topRepeated.rows[1].sql_template, 'SELECT Role FROM SYS_OperatorRole Where SOID= ?');
     assert.strictEqual(Number(topRepeated.rows[1].count), 133);
 
-    assert.strictEqual(topSlow.rows[0].exec_time_ms, 100);
+    // 验证 Top 1 慢 SQL 执行耗时为 3165 ms
+    assert.strictEqual(topSlow.rows[0].exec_time_ms, 3165);
 });
 
 test('8. compressSqlColumns SQL多列名精简压缩算法测试', () => {
