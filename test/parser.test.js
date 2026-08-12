@@ -203,3 +203,24 @@ test('11. 独立新增测试：Trace 链路数据按耗时升降序逻辑校验'
     assert.strictEqual(descSorted[1].exec_time_ms, 50);
     assert.strictEqual(descSorted[2].exec_time_ms, 10);
 });
+
+test('12. 独立新增测试：Trace 链路从耗时排序无感恢复原始日志时间顺序逻辑测试', () => {
+    const rawData = [
+        { id: 1, exec_time_ms: 10, full_sql: 'SQL 1' },
+        { id: 2, exec_time_ms: 300, full_sql: 'SQL 2' },
+        { id: 3, exec_time_ms: 50, full_sql: 'SQL 3' }
+    ];
+
+    // 标记原始天然索引
+    const mapped = rawData.map((item, idx) => ({ ...item, _origIndex: idx }));
+
+    // 耗时降序
+    const desc = [...mapped].sort((a, b) => b.exec_time_ms - a.exec_time_ms);
+    assert.strictEqual(desc[0].full_sql, 'SQL 2');
+
+    // 切回默认：恢复天然日志时间顺序
+    const restored = [...desc].sort((a, b) => a._origIndex - b._origIndex);
+    assert.strictEqual(restored[0].full_sql, 'SQL 1');
+    assert.strictEqual(restored[1].full_sql, 'SQL 2');
+    assert.strictEqual(restored[2].full_sql, 'SQL 3');
+});

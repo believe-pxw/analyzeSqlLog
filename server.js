@@ -502,7 +502,7 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 3. Trace 链路 Panel (支持耗时排序) -->
+        <!-- 3. Trace 链路 Panel (支持三态无感切换与秒级还原日志时间) -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
@@ -521,7 +521,7 @@ function getDashboardHtml() {
                         <tr>
                             <th style="width: 50px;">序号</th>
                             <th style="width: 150px;">时间</th>
-                            <th style="width: 110px; cursor: pointer; user-select: none;" onclick="toggleTraceCostSort()" title="点击切换耗时排序">耗时 (ms) ↕</th>
+                            <th style="width: 110px; cursor: pointer; user-select: none;" onclick="toggleTraceCostSort()" title="点击三态循环切换: 时间顺序 -> 耗时降序 -> 耗时升序 -> 时间顺序">耗时 (ms) ↕</th>
                             <th style="width: 80px;">影响行数</th>
                             <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
@@ -850,13 +850,14 @@ function getDashboardHtml() {
             const res = await fetch('/api/trace?traceId=' + encodeURIComponent(traceId));
             const json = await res.json();
             if (json.success) {
-                rawTraceData = json.data;
+                // 标记原始从后端加载的天然日志时间下标 _origIndex
+                rawTraceData = (json.data || []).map((item, idx) => ({ ...item, _origIndex: idx }));
                 sortAndRenderTraceTable();
             }
         }
 
         /**
-         * Trace 链路耗时排序与检索过滤逻辑
+         * Trace 链路耗时排序与检索过滤逻辑（支持精确还原默认日志时间顺序）
          */
         function sortAndRenderTraceTable() {
             if (!rawTraceData) return;
@@ -868,6 +869,9 @@ function getDashboardHtml() {
                 sorted.sort((a, b) => (b.exec_time_ms || 0) - (a.exec_time_ms || 0));
             } else if (sortMode === 'cost-asc') {
                 sorted.sort((a, b) => (a.exec_time_ms || 0) - (b.exec_time_ms || 0));
+            } else {
+                // 100% 准确还原最初日志时间自然顺序
+                sorted.sort((a, b) => (a._origIndex || 0) - (b._origIndex || 0));
             }
 
             if (q) {
@@ -880,12 +884,17 @@ function getDashboardHtml() {
             renderTraceTable(sorted);
         }
 
+        /**
+         * 表头三态优雅轮转切换：日志时间顺序 -> 耗时降序 -> 耗时升序 -> 日志时间顺序
+         */
         function toggleTraceCostSort() {
             const sel = document.getElementById('trace-sort-select');
-            if (sel.value === 'cost-desc') {
+            if (sel.value === 'default') {
+                sel.value = 'cost-desc';
+            } else if (sel.value === 'cost-desc') {
                 sel.value = 'cost-asc';
             } else {
-                sel.value = 'cost-desc';
+                sel.value = 'default';
             }
             sortAndRenderTraceTable();
         }
