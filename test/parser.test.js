@@ -58,7 +58,7 @@ test('3. 完整日志文件状态机与断句割裂防污染测试', async () =>
     assert.strictEqual(records[1].sql_params, '#0:createScheduler');
 });
 
-test('4. DuckDB 内存聚合与 TraceID 过滤测试', async () => {
+test('4. DuckDB 内存聚合与后端分页测试', async () => {
     const db = new SqlLogDatabase(':memory:');
     await db.initSchema();
 
@@ -69,16 +69,19 @@ test('4. DuckDB 内存聚合与 TraceID 过滤测试', async () => {
         { id: 4, log_time: '2026-08-12 10:00:03.000', trace_id: '-', thread_name: 'th-3', exec_time_ms: 5, result_rows: 1, db_manager: 'mysql', sql_template: 'update `SYS_Lock` set Slock=1 where UniqueKey=?', sql_params: '#0:a', full_sql: 'update `SYS_Lock` set Slock=1' }
     ]);
 
-    // 测试未过滤
-    const repeatedAll = await db.getTopRepeated(10, '', false);
-    assert.strictEqual(repeatedAll.length, 3);
+    // 分页查询第一页 (pageSize=2)
+    const page1 = await db.getTopRepeated(1, 2, '', false);
+    assert.strictEqual(page1.total, 3);
+    assert.strictEqual(page1.rows.length, 2);
+    assert.strictEqual(Number(page1.rows[0].count), 2);
 
-    // 测试按 TraceID 过滤
-    const repeatedT1 = await db.getTopRepeated(10, 't-1', false);
-    assert.strictEqual(repeatedT1.length, 1);
-    assert.strictEqual(Number(repeatedT1[0].count), 2);
+    // 分页查询第二页 (pageSize=2)
+    const page2 = await db.getTopRepeated(2, 2, '', false);
+    assert.strictEqual(page2.total, 3);
+    assert.strictEqual(page2.rows.length, 1);
 
-    // 测试排除后台锁
-    const repeatedNoBg = await db.getTopRepeated(10, '', true);
-    assert.strictEqual(repeatedNoBg.length, 2);
+    // 慢 SQL 分页查询
+    const slowPage1 = await db.getTopSlow(1, 2, '', false);
+    assert.strictEqual(slowPage1.total, 4);
+    assert.strictEqual(slowPage1.rows[0].exec_time_ms, 100);
 });

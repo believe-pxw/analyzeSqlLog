@@ -1,7 +1,6 @@
 const duckdb = require('duckdb');
 const path = require('path');
 const os = require('os');
-const fs = require('fs');
 
 class SqlLogDatabase {
     /**
@@ -52,7 +51,6 @@ class SqlLogDatabase {
             const stmt = this.conn.prepare(`
                 INSERT INTO sqllogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
-            let count = 0;
             for (const r of records) {
                 stmt.run(
                     r.id,
@@ -83,7 +81,7 @@ class SqlLogDatabase {
         });
     }
 
-    async getTopRepeated(limit = 30, traceId = '', excludeBackground = false) {
+    async getTopRepeated(page = 1, pageSize = 20, traceId = '', excludeBackground = false) {
         let whereClauses = ["sql_template != ''"];
         if (traceId) {
             const cleanTraceId = traceId.replace(/'/g, "''");
@@ -94,6 +92,15 @@ class SqlLogDatabase {
         }
 
         const whereSql = 'WHERE ' + whereClauses.join(' AND ');
+
+        // 查询符合条件的数据总行数
+        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs ${whereSql};`;
+        const countRes = await this.query(countSql);
+        const total = countRes[0] ? Number(countRes[0].total) : 0;
+
+        const p = Math.max(1, parseInt(page, 10) || 1);
+        const ps = Math.max(1, parseInt(pageSize, 10) || 20);
+        const offset = (p - 1) * ps;
 
         const sql = `
             SELECT 
@@ -107,12 +114,13 @@ class SqlLogDatabase {
             ${whereSql}
             GROUP BY sql_template
             ORDER BY count DESC, total_time_ms DESC
-            LIMIT ${parseInt(limit, 10)};
+            LIMIT ${ps} OFFSET ${offset};
         `;
-        return this.query(sql);
+        const rows = await this.query(sql);
+        return { rows, total, page: p, pageSize: ps };
     }
 
-    async getTopSlow(limit = 30, traceId = '', excludeBackground = false) {
+    async getTopSlow(page = 1, pageSize = 20, traceId = '', excludeBackground = false) {
         let whereClauses = [];
         if (traceId) {
             const cleanTraceId = traceId.replace(/'/g, "''");
@@ -124,15 +132,25 @@ class SqlLogDatabase {
 
         const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
+        // 查询符合条件的数据总行数
+        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereSql};`;
+        const countRes = await this.query(countSql);
+        const total = countRes[0] ? Number(countRes[0].total) : 0;
+
+        const p = Math.max(1, parseInt(page, 10) || 1);
+        const ps = Math.max(1, parseInt(pageSize, 10) || 20);
+        const offset = (p - 1) * ps;
+
         const sql = `
             SELECT 
                 id, log_time, trace_id, thread_name, exec_time_ms, result_rows, sql_template, full_sql
             FROM sqllogs
             ${whereSql}
             ORDER BY exec_time_ms DESC, id ASC
-            LIMIT ${parseInt(limit, 10)};
+            LIMIT ${ps} OFFSET ${offset};
         `;
-        return this.query(sql);
+        const rows = await this.query(sql);
+        return { rows, total, page: p, pageSize: ps };
     }
 
     async getByTraceId(traceId) {

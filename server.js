@@ -33,19 +33,23 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/top-repeated' && method === 'GET') {
-                    const limit = parsedUrl.query.limit || 30;
+                    const page = parseInt(parsedUrl.query.page, 10) || 1;
+                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 20;
                     const traceId = parsedUrl.query.traceId || '';
                     const excludeBg = parsedUrl.query.excludeBackground === 'true';
-                    const rows = await dbInstance.getTopRepeated(limit, traceId, excludeBg);
-                    return res.end(safeJsonStringify({ success: true, data: rows }));
+                    
+                    const result = await dbInstance.getTopRepeated(page, pageSize, traceId, excludeBg);
+                    return res.end(safeJsonStringify({ success: true, data: result.rows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
 
                 if (pathname === '/api/top-slow' && method === 'GET') {
-                    const limit = parsedUrl.query.limit || 30;
+                    const page = parseInt(parsedUrl.query.page, 10) || 1;
+                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 20;
                     const traceId = parsedUrl.query.traceId || '';
                     const excludeBg = parsedUrl.query.excludeBackground === 'true';
-                    const rows = await dbInstance.getTopSlow(limit, traceId, excludeBg);
-                    return res.end(safeJsonStringify({ success: true, data: rows }));
+
+                    const result = await dbInstance.getTopSlow(page, pageSize, traceId, excludeBg);
+                    return res.end(safeJsonStringify({ success: true, data: result.rows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
 
                 if (pathname === '/api/trace' && method === 'GET') {
@@ -101,6 +105,15 @@ function createServer(dbInstance, parseStats, port = 3000) {
         }
     });
 
+    // 优雅退出处理
+    const cleanup = () => {
+        server.close(() => {
+            process.exit(0);
+        });
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+
     server.listen(port, () => {
         const { exec } = require('child_process');
         const url = `http://localhost:${port}`;
@@ -150,36 +163,17 @@ function getDashboardHtml() {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 20px 28px;
+            padding: 18px 24px;
             background: var(--panel-bg);
             box-shadow: var(--shadow);
             border: 1px solid var(--border);
             border-radius: 12px;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
 
         .title { display: flex; align-items: center; gap: 12px; }
         .title h1 { font-size: 22px; font-weight: 700; color: #0284c7; }
         .badge { background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; border: 1px solid #bae6fd; }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
-            margin-bottom: 24px;
-        }
-
-        .stat-card {
-            background: var(--panel-bg);
-            border: 1px solid var(--border);
-            box-shadow: var(--shadow);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-        }
-        .stat-card .label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
-        .stat-card .value { font-size: 26px; font-weight: 700; margin-top: 6px; color: var(--text); }
 
         .tabs {
             display: flex;
@@ -204,6 +198,25 @@ function getDashboardHtml() {
 
         .panel { display: none; }
         .panel.active { display: block; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            border-radius: 12px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-card .label { font-size: 14px; color: var(--text-muted); font-weight: 500; }
+        .stat-card .value { font-size: 30px; font-weight: 700; margin-top: 8px; color: var(--text); }
 
         .toolbar {
             display: flex;
@@ -278,6 +291,19 @@ function getDashboardHtml() {
             border: 1px solid #cbd5e1;
         }
 
+        .sql-toggle-btn {
+            background: #e0f2fe;
+            color: #0284c7;
+            border: 1px solid #bae6fd;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 6px;
+        }
+        .sql-toggle-btn:hover { background: #bae6fd; }
+
         .trace-link { color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer; }
         .trace-link:hover { text-decoration: underline; }
 
@@ -313,6 +339,39 @@ function getDashboardHtml() {
             font-weight: 500;
         }
         .copy-btn:hover { color: #0f172a; background: #cbd5e1; }
+
+        /* 分页条 Pagination Bar */
+        .pagination-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px;
+            background: #ffffff;
+            border-top: 1px solid var(--border);
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+        .pagination-info { font-size: 13.5px; color: var(--text-muted); }
+        .pagination-controls { display: flex; align-items: center; gap: 8px; }
+        .page-btn {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            color: #334155;
+            padding: 5px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .page-btn:hover:not(:disabled) { background: #e2e8f0; color: #0f172a; }
+        .page-select {
+            padding: 5px 8px;
+            border-radius: 6px;
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -325,16 +384,10 @@ function getDashboardHtml() {
             <div id="parse-time" style="font-size: 13px; color: var(--text-muted);">数据加载完成</div>
         </header>
 
-        <div class="stats-grid" id="stats-container">
-            <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
-            <div class="stat-card"><span class="label">SQL 归一模板数</span><span class="value" id="stat-distinct-templates">-</span></div>
-            <div class="stat-card"><span class="label">最高慢 SQL 耗时</span><span class="value" id="stat-max-cost" style="color: var(--accent-red);">-</span></div>
-            <div class="stat-card"><span class="label">独立 Trace 动作数</span><span class="value" id="stat-total-traces" style="color: var(--accent-green);">-</span></div>
-        </div>
-
         <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('repeated')">📊 SQL 频次榜 (Top Repeated)</button>
-            <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行 (Top Slow)</button>
+            <button class="tab-btn active" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
+            <button class="tab-btn" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
+            <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
             <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
             <button class="tab-btn" onclick="switchTab('diagnose')">💡 N+1 冗余诊断</button>
             <button class="tab-btn" onclick="switchTab('query')">🔍 自由 DuckDB SQL 控制台</button>
@@ -343,11 +396,11 @@ function getDashboardHtml() {
         <!-- 频次榜 Panel -->
         <div id="panel-repeated" class="panel active">
             <div class="toolbar">
-                <input type="text" id="trace-repeated" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated()">
-                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_... / ECO_...）" oninput="filterRepeatedTable()">
+                <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
+                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
                 <label class="filter-checkbox">
-                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated()">
-                    🚫 排除后台锁/定时任务 (SYS_Lock/ScheduledTask)
+                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated(1)">
+                    🚫 排除后台锁/定时任务
                 </label>
             </div>
             <div class="table-container">
@@ -365,17 +418,18 @@ function getDashboardHtml() {
                     </thead>
                     <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
+                <div class="pagination-bar" id="repeated-pagination"></div>
             </div>
         </div>
 
         <!-- 慢 SQL Panel -->
         <div id="panel-slow" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-slow" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow()">
+                <input type="text" id="trace-slow" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
                 <input type="text" id="search-slow" class="search-input" placeholder="搜索慢 SQL 语句..." oninput="filterSlowTable()">
                 <label class="filter-checkbox">
-                    <input type="checkbox" id="chk-slow-bg" onchange="loadSlow()">
-                    🚫 排除后台锁/定时任务 (SYS_Lock/ScheduledTask)
+                    <input type="checkbox" id="chk-slow-bg" onchange="loadSlow(1)">
+                    🚫 排除后台锁/定时任务
                 </label>
             </div>
             <div class="table-container">
@@ -392,6 +446,19 @@ function getDashboardHtml() {
                     </thead>
                     <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
+                <div class="pagination-bar" id="slow-pagination"></div>
+            </div>
+        </div>
+
+        <!-- 独立概览统计 Tab Panel -->
+        <div id="panel-overview" class="panel">
+            <div class="stats-grid">
+                <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
+                <div class="stat-card"><span class="label">SQL 归一模板数</span><span class="value" id="stat-distinct-templates">-</span></div>
+                <div class="stat-card"><span class="label">最高慢 SQL 耗时</span><span class="value" id="stat-max-cost" style="color: var(--accent-red);">-</span></div>
+                <div class="stat-card"><span class="label">独立 Trace 动作数</span><span class="value" id="stat-total-traces" style="color: var(--accent-green);">-</span></div>
+                <div class="stat-card"><span class="label">SQL 总执行耗时</span><span class="value" id="stat-total-time" style="color: var(--accent);">-</span></div>
+                <div class="stat-card"><span class="label">SQL 平均执行耗时</span><span class="value" id="stat-avg-time">-</span></div>
             </div>
         </div>
 
@@ -452,6 +519,13 @@ function getDashboardHtml() {
     <script>
         let rawRepeatedData = [];
         let rawSlowData = [];
+        let curRepeatedPage = 1;
+        let curRepeatedPageSize = 20;
+        let totalRepeatedCount = 0;
+
+        let curSlowPage = 1;
+        let curSlowPageSize = 20;
+        let totalSlowCount = 0;
 
         async function init() {
             try {
@@ -463,15 +537,17 @@ function getDashboardHtml() {
                     document.getElementById('stat-distinct-templates').innerText = (d.distinct_templates || 0).toLocaleString();
                     document.getElementById('stat-max-cost').innerText = (d.max_exec_time_ms || 0) + ' ms';
                     document.getElementById('stat-total-traces').innerText = (d.total_traces || 0).toLocaleString();
+                    document.getElementById('stat-total-time').innerText = (d.total_exec_time_ms || 0) + ' ms';
+                    document.getElementById('stat-avg-time').innerText = (d.avg_exec_time_ms || 0) + ' ms';
                     
                     if (d.parseStats) {
-                        document.getElementById('parse-time').innerText = \`扫描 \${d.parseStats.totalFiles} 个文件, \${d.parseStats.totalLines} 行日志, 提取 \${d.parseStats.totalRecords} 条 SQL (耗时 \${d.parseStats.costMs} ms)\`;
+                        document.getElementById('parse-time').innerText = \`扫描 \${d.parseStats.totalFiles} 个文件, \${d.parseStats.totalLines.toLocaleString()} 行日志, 提取 \${d.parseStats.totalRecords.toLocaleString()} 条 SQL (耗时 \${d.parseStats.costMs} ms)\`;
                     }
                 }
             } catch(e) {}
 
-            loadRepeated();
-            loadSlow();
+            loadRepeated(1);
+            loadSlow(1);
             loadDiagnostics();
         }
 
@@ -483,15 +559,40 @@ function getDashboardHtml() {
             document.getElementById('panel-' + name).classList.add('active');
         }
 
-        async function loadRepeated() {
+        /**
+         * 智能精简列名：若带有大量 select col1, col2, ... 则精简为 select ... from
+         */
+        function compressSqlColumns(sql) {
+            if (!sql) return '';
+            // 匹配 select xxx from 模式
+            const match = sql.match(/^(select\s+)([\s\S]+?)(\s+from\s+[\s\S]+)$/i);
+            if (match) {
+                const selectHead = match[1];
+                const cols = match[2];
+                const tail = match[3];
+                // 如果列定义包含 3 个以上的逗号或长度 > 40
+                if ((cols.match(/,/g) || []).length >= 3 || cols.length > 40) {
+                    return selectHead + '... ' + tail;
+                }
+            }
+            return sql;
+        }
+
+        async function loadRepeated(page = 1) {
+            curRepeatedPage = page;
             const traceId = document.getElementById('trace-repeated').value.trim();
             const excludeBg = document.getElementById('chk-repeated-bg').checked;
 
-            const res = await fetch(\`/api/top-repeated?limit=50&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+            const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
             const json = await res.json();
             if (json.success) {
                 rawRepeatedData = json.data;
+                totalRepeatedCount = json.total;
                 renderRepeatedTable(rawRepeatedData);
+                renderPagination('repeated-pagination', curRepeatedPage, curRepeatedPageSize, totalRepeatedCount, (p, ps) => {
+                    curRepeatedPageSize = ps;
+                    loadRepeated(p);
+                });
             }
         }
 
@@ -501,20 +602,29 @@ function getDashboardHtml() {
                 tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">未找到符合条件的 SQL</td></tr>';
                 return;
             }
-            tbody.innerHTML = data.map((r, i) => \`
+            const offset = (curRepeatedPage - 1) * curRepeatedPageSize;
+            tbody.innerHTML = data.map((r, i) => {
+                const fullSql = r.sql_template || '';
+                const briefSql = compressSqlColumns(fullSql);
+                const hasAbbr = briefSql !== fullSql;
+                const elementId = 'rep-sql-' + (offset + i);
+
+                return \`
                 <tr>
-                    <td>\${i + 1}</td>
+                    <td>\${offset + i + 1}</td>
                     <td><span class="tag-freq">\${r.count} 次</span></td>
                     <td>\${r.total_time_ms} ms</td>
                     <td>\${r.avg_time_ms} ms</td>
                     <td>\${r.max_time_ms} ms</td>
                     <td>\${r.trace_count}</td>
                     <td>
-                        <div class="sql-code">\${escapeHtml(r.sql_template)}</div>
-                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.sql_template)}\\\`)">复制 SQL 模板</button>
+                        \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
+                        <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制 SQL 模板</button>
                     </td>
                 </tr>
-            \`).join('');
+            \`;
+            }).join('');
         }
 
         function filterRepeatedTable() {
@@ -523,15 +633,21 @@ function getDashboardHtml() {
             renderRepeatedTable(filtered);
         }
 
-        async function loadSlow() {
+        async function loadSlow(page = 1) {
+            curSlowPage = page;
             const traceId = document.getElementById('trace-slow').value.trim();
             const excludeBg = document.getElementById('chk-slow-bg').checked;
 
-            const res = await fetch(\`/api/top-slow?limit=50&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+            const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
             const json = await res.json();
             if (json.success) {
                 rawSlowData = json.data;
+                totalSlowCount = json.total;
                 renderSlowTable(rawSlowData);
+                renderPagination('slow-pagination', curSlowPage, curSlowPageSize, totalSlowCount, (p, ps) => {
+                    curSlowPageSize = ps;
+                    loadSlow(p);
+                });
             }
         }
 
@@ -541,19 +657,28 @@ function getDashboardHtml() {
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">未找到符合条件的慢 SQL</td></tr>';
                 return;
             }
-            tbody.innerHTML = data.map((r, i) => \`
+            const offset = (curSlowPage - 1) * curSlowPageSize;
+            tbody.innerHTML = data.map((r, i) => {
+                const fullSql = r.full_sql || r.sql_template || '';
+                const briefSql = compressSqlColumns(fullSql);
+                const hasAbbr = briefSql !== fullSql;
+                const elementId = 'slow-sql-' + (offset + i);
+
+                return \`
                 <tr>
-                    <td>\${i + 1}</td>
+                    <td>\${offset + i + 1}</td>
                     <td><span class="tag-slow">\${r.exec_time_ms} ms</span></td>
                     <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
                     <td>
-                        <div class="sql-code">\${escapeHtml(r.full_sql || r.sql_template)}</div>
-                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.full_sql || r.sql_template)}\\\`)">复制完整 SQL</button>
+                        \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
+                        <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                        <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制完整 SQL</button>
                     </td>
                 </tr>
-            \`).join('');
+            \`;
+            }).join('');
         }
 
         function filterSlowTable() {
@@ -564,6 +689,56 @@ function getDashboardHtml() {
                 (d.trace_id || '').toLowerCase().includes(q)
             );
             renderSlowTable(filtered);
+        }
+
+        function toggleSql(id) {
+            const div = document.getElementById(id);
+            const btn = document.getElementById('btn-' + id);
+            const full = div.getAttribute('data-full');
+            const brief = div.getAttribute('data-brief');
+
+            if (btn.innerText === '展开完整列名') {
+                div.innerHTML = escapeHtml(full);
+                btn.innerText = '收起列名';
+            } else {
+                div.innerHTML = escapeHtml(brief);
+                btn.innerText = '展开完整列名';
+            }
+        }
+
+        function renderPagination(containerId, page, pageSize, total, onPageChange) {
+            const container = document.getElementById(containerId);
+            const totalPages = Math.ceil(total / pageSize) || 1;
+
+            container.innerHTML = \`
+                <div class="pagination-info">共 \${total.toLocaleString()} 条记录，第 \${page} / \${totalPages} 页</div>
+                <div class="pagination-controls">
+                    <button class="page-btn" \${page <= 1 ? 'disabled' : ''} onclick="changePage('\${containerId}', 1)">首页</button>
+                    <button class="page-btn" \${page <= 1 ? 'disabled' : ''} onclick="changePage('\${containerId}', \${page - 1})">上一页</button>
+                    <span style="font-size: 13px;">每页</span>
+                    <select class="page-select" onchange="changePageSize('\${containerId}', this.value)">
+                        <option value="15" \${pageSize === 15 ? 'selected' : ''}>15 条</option>
+                        <option value="20" \${pageSize === 20 ? 'selected' : ''}>20 条</option>
+                        <option value="50" \${pageSize === 50 ? 'selected' : ''}>50 条</option>
+                        <option value="100" \${pageSize === 100 ? 'selected' : ''}>100 条</option>
+                    </select>
+                    <button class="page-btn" \${page >= totalPages ? 'disabled' : ''} onclick="changePage('\${containerId}', \${page + 1})">下一页</button>
+                    <button class="page-btn" \${page >= totalPages ? 'disabled' : ''} onclick="changePage('\${containerId}', \${totalPages})">尾页</button>
+                </div>
+            \`;
+
+            window['cb_' + containerId] = onPageChange;
+        }
+
+        function changePage(containerId, targetPage) {
+            const cb = window['cb_' + containerId];
+            const ps = containerId === 'repeated-pagination' ? curRepeatedPageSize : curSlowPageSize;
+            if (cb) cb(targetPage, ps);
+        }
+
+        function changePageSize(containerId, newSize) {
+            const cb = window['cb_' + containerId];
+            if (cb) cb(1, parseInt(newSize, 10));
         }
 
         async function loadTraceData() {
@@ -585,18 +760,26 @@ function getDashboardHtml() {
                 const totalCost = data.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
                 summary.innerText = \`Trace [ \${traceId} ] 包含 \${data.length} 条 SQL 执行记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms\`;
 
-                tbody.innerHTML = data.map((r, i) => \`
+                tbody.innerHTML = data.map((r, i) => {
+                    const fullSql = r.full_sql || r.sql_template || '';
+                    const briefSql = compressSqlColumns(fullSql);
+                    const hasAbbr = briefSql !== fullSql;
+                    const elementId = 'trace-sql-' + i;
+
+                    return \`
                     <tr>
                         <td>\${i + 1}</td>
                         <td>\${r.log_time}</td>
                         <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                         <td>\${r.result_rows}</td>
                         <td>
-                            <div class="sql-code">\${escapeHtml(r.full_sql || r.sql_template)}</div>
-                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(r.full_sql || r.sql_template)}\\\`)">复制</button>
+                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">展开完整列名</button>\` : ''}
+                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
                         </td>
                     </tr>
-                \`).join('');
+                \`;
+                }).join('');
             }
         }
 

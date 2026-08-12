@@ -72,9 +72,9 @@ async function main() {
 
     // 命令行打印 Top 5 频次 SQL
     try {
-        const topRepeated = await db.getTopRepeated(5, '', true);
+        const topRepeated = await db.getTopRepeated(1, 5, '', true);
         console.log(`\n📊 【Top 5 业务 SQL 模板 (已自动排除后台任务)】`);
-        topRepeated.forEach((r, idx) => {
+        topRepeated.rows.forEach((r, idx) => {
             console.log(`\n#${idx + 1} 出现次数: ${r.count} 次 | 总耗时: ${r.total_time_ms} ms | 平均: ${r.avg_time_ms} ms`);
             console.log(`   SQL 模板: ${r.sql_template.replace(/\s+/g, ' ').substring(0, 120)}...`);
         });
@@ -84,9 +84,9 @@ async function main() {
 
     // 命令行打印 Top 5 慢 SQL
     try {
-        const topSlow = await db.getTopSlow(5, '', true);
+        const topSlow = await db.getTopSlow(1, 5, '', true);
         console.log(`\n🐢 【Top 5 业务慢 SQL (已自动排除后台任务)】`);
-        topSlow.forEach((r, idx) => {
+        topSlow.rows.forEach((r, idx) => {
             console.log(`\n#${idx + 1} 执行耗时: ${r.exec_time_ms} ms | TraceID: ${r.trace_id} | 时间: ${r.log_time}`);
             console.log(`   SQL: ${(r.full_sql || r.sql_template).replace(/\s+/g, ' ').substring(0, 120)}...`);
         });
