@@ -44,7 +44,7 @@ async function main() {
     await db.initSchema();
 
     let batch = [];
-    const BATCH_SIZE = 2000;
+    const BATCH_SIZE = 10000;
 
     // 流式解析并批量写入 DuckDB
     const parseResult = await parseLogs(targetPath, async (record) => {

@@ -3,56 +3,78 @@ const readline = require('readline');
 const path = require('path');
 
 /**
- * 解析时间耗时字符串 (如 "0ms", "3165ms/TimeCostLevel100ms200ms500ms1s2s", "1.5s/TimeCostLevel...")
+ * 高性能解析时间耗时字符串 (如 "0ms", "3165ms/TimeCostLevel100ms200ms500ms1s2s", "1.5s/TimeCostLevel...")
  * 自动识别并截取 '/' 前面的真正耗时数值
  */
 function parseTimeToMs(timeStr) {
     if (!timeStr) return 0;
-    const cleanStr = timeStr.trim().split('/')[0].trim();
-    const match = cleanStr.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
-    if (!match) return 0;
-    const val = parseFloat(match[1]);
-    const unit = (match[2] || 'ms').toLowerCase();
-    if (unit === 's') return Math.round(val * 1000);
-    if (unit === 'm') return Math.round(val * 60000);
+    const slashIdx = timeStr.indexOf('/');
+    const cleanStr = slashIdx !== -1 ? timeStr.substring(0, slashIdx).trim() : timeStr.trim();
+    const val = parseFloat(cleanStr);
+    if (isNaN(val)) return 0;
+    if (cleanStr.endsWith('s') || cleanStr.endsWith('S')) {
+        if (cleanStr.endsWith('ms') || cleanStr.endsWith('MS')) {
+            return Math.round(val);
+        }
+        return Math.round(val * 1000);
+    }
+    if (cleanStr.endsWith('m') || cleanStr.endsWith('M')) {
+        return Math.round(val * 60000);
+    }
     return Math.round(val);
 }
 
 /**
- * 从日志 Header 行中提取 时间、TraceID、线程名
+ * 高性能快速判定行首是否为标准日志 Header (格式: 2026-08-12 13:44:26...)
+ */
+function isLogHeader(line) {
+    if (line.length < 19) return false;
+    return line.charCodeAt(4) === 45 &&  // '-'
+           line.charCodeAt(7) === 45 &&  // '-'
+           line.charCodeAt(10) === 32 && // ' '
+           line.charCodeAt(13) === 58 && // ':'
+           line.charCodeAt(16) === 58;   // ':'
+}
+
+/**
+ * 高性能从日志 Header 行中提取 时间、TraceID、线程名
  */
 function parseLogHeader(line) {
-    // 匹配时间戳: 2026-08-12 13:12:00.062
-    const timeMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})/);
-    const logTime = timeMatch ? timeMatch[1] : '';
+    const logTime = line.length >= 23 ? line.substring(0, 23) : line;
+    let traceId = '-';
+    let threadName = '-';
+    let bracketCount = 0;
+    let start = -1;
 
-    // 提取所有 [] 中的中括号内容
-    const bracketMatches = [];
-    const re = /\[([^\]]+)\]/g;
-    let m;
-    while ((m = re.exec(line)) !== null) {
-        bracketMatches.push(m[1]);
+    for (let i = 0; i < line.length; i++) {
+        const c = line.charCodeAt(i);
+        if (c === 91) { // '['
+            start = i + 1;
+        } else if (c === 93 && start !== -1) { // ']'
+            bracketCount++;
+            if (bracketCount === 5) {
+                traceId = line.substring(start, i);
+            } else if (bracketCount === 8) {
+                threadName = line.substring(start, i);
+                break;
+            }
+            start = -1;
+        }
     }
-
-    // 根据约定: brackets[4] 为 TraceID, brackets[7] 为 线程名
-    let traceId = bracketMatches.length >= 5 ? bracketMatches[4] : '-';
-    let threadName = bracketMatches.length >= 8 ? bracketMatches[7] : '-';
 
     return { logTime, traceId, threadName };
 }
 
 /**
- * 清理 SQL 字符串中的 '>' 换行符前缀与包裹的结尾 ']'
+ * 高性能清理 SQL 字符串中的 '>' 换行符前缀与包裹的结尾 ']'
  */
 function cleanSqlText(text) {
     if (!text) return '';
-    const lines = text.split('\n').map(l => {
-        return l.replace(/^\s*>\s*/, '').trim();
-    }).filter(l => l.length > 0);
-
-    let result = lines.join('\n');
-    result = result.replace(/\s*\]\s*$/, '').trim();
-    return result;
+    let str = text.replace(/(^|\n)\s*>\s*/g, '$1').trim();
+    if (str.endsWith(']')) {
+        str = str.replace(/\s*\]\s*$/, '').trim();
+    }
+    return str;
 }
 
 /**
@@ -62,7 +84,7 @@ function cleanSqlText(text) {
  * @returns {Promise<{totalLines: number, totalRecords: number}>}
  */
 async function parseLogFile(filePath, onRecord, startRecordId = 0) {
-    const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 64 * 1024 });
+    const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 512 * 1024 });
     const rl = readline.createInterface({
         input: fileStream,
         crlfDelay: Infinity
@@ -101,10 +123,8 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
         totalLines++;
         const line = rawLine;
 
-        // 判定是否是标准日志 Header 行 (时间戳开头: 2026-08-12 13:44:26...)
-        const isAnyLogHeader = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/.test(line);
-
-        if (isAnyLogHeader) {
+        // 极速判断 Header
+        if (isLogHeader(line)) {
             // 一旦遇到任何新日志 Header，必然刷新闭合前一条 SQL 记录
             await flushCurrent();
 
