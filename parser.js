@@ -314,21 +314,25 @@ async function parseLogs(targetPath, onRecord) {
                 workerData: { files: workerFiles }
             });
 
-            worker.on('message', async (msg) => {
+            let pendingBatchPromise = Promise.resolve();
+
+            worker.on('message', (msg) => {
                 if (msg.type === 'batch') {
-                    const records = msg.records;
-                    const len = records.length;
-                    for (let i = 0; i < len; i++) {
-                        grandTotalRecords++;
-                        records[i].id = grandTotalRecords;
-                        const res = onRecord(records[i]);
-                        if (res && typeof res.then === 'function') {
-                            await res;
+                    pendingBatchPromise = pendingBatchPromise.then(async () => {
+                        const records = msg.records;
+                        const len = records.length;
+                        for (let i = 0; i < len; i++) {
+                            grandTotalRecords++;
+                            records[i].id = grandTotalRecords;
+                            const res = onRecord(records[i]);
+                            if (res && typeof res.then === 'function') {
+                                await res;
+                            }
                         }
-                    }
+                    });
                 } else if (msg.type === 'done') {
                     grandTotalLines += msg.totalLines;
-                    resolve();
+                    pendingBatchPromise.then(() => resolve()).catch(reject);
                 }
             });
 
