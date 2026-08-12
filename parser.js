@@ -8,7 +8,6 @@ const path = require('path');
  */
 function parseTimeToMs(timeStr) {
     if (!timeStr) return 0;
-    // 取 '/' 左侧的核心耗时部分
     const cleanStr = timeStr.trim().split('/')[0].trim();
     const match = cleanStr.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
     if (!match) return 0;
@@ -47,14 +46,11 @@ function parseLogHeader(line) {
  */
 function cleanSqlText(text) {
     if (!text) return '';
-    // 按行拆分，处理每行的前置 '>' 字符
     const lines = text.split('\n').map(l => {
         return l.replace(/^\s*>\s*/, '').trim();
     }).filter(l => l.length > 0);
 
     let result = lines.join('\n');
-    
-    // 移除尾部未闭合的多余 ']' 字符
     result = result.replace(/\s*\]\s*$/, '').trim();
     return result;
 }
@@ -77,13 +73,13 @@ async function parseLogFile(filePath, onRecord) {
 
     let currentRecord = null;
     let captureState = null; // 'sql_template' | 'full_sql' | null
+    let lastHeaderInfo = { logTime: '', traceId: '-', threadName: '-' };
 
     function flushCurrent() {
         if (currentRecord) {
             currentRecord.sql_template = cleanSqlText(currentRecord.sql_template);
             currentRecord.full_sql = cleanSqlText(currentRecord.full_sql);
 
-            // 若只有其中一种，进行互相补充
             if (!currentRecord.sql_template && currentRecord.full_sql) {
                 currentRecord.sql_template = currentRecord.full_sql;
             }
@@ -91,7 +87,6 @@ async function parseLogFile(filePath, onRecord) {
                 currentRecord.full_sql = currentRecord.sql_template;
             }
 
-            // 只有包含有效 SQL 的记录才算数
             if (currentRecord.sql_template || currentRecord.full_sql) {
                 totalRecords++;
                 currentRecord.id = totalRecords;
@@ -113,16 +108,22 @@ async function parseLogFile(filePath, onRecord) {
             // 一旦遇到任何新日志 Header，必然刷新闭合前一条 SQL 记录
             flushCurrent();
 
+            // 无论任何类名的 Header，都记忆更新最近的 Header 上下文
+            lastHeaderInfo = parseLogHeader(line);
+
             // 判断是否是 SQL 相关的日志 Header
-            const isSqlLogHeader = line.includes('PreparedStatementWithLog') || line.includes('SQLLogUtils') || line.includes('SQL执行信息');
+            const isSqlLogHeader = line.includes('PreparedStatementWithLog') || 
+                                   line.includes('SQLLogUtils') || 
+                                   line.includes('GeneralDBManager') ||
+                                   line.includes('DBManager') ||
+                                   line.includes('SQL执行信息');
 
             if (isSqlLogHeader) {
-                const headerInfo = parseLogHeader(line);
                 currentRecord = {
                     id: 0,
-                    log_time: headerInfo.logTime,
-                    trace_id: headerInfo.traceId,
-                    thread_name: headerInfo.threadName,
+                    log_time: lastHeaderInfo.logTime,
+                    trace_id: lastHeaderInfo.traceId,
+                    thread_name: lastHeaderInfo.threadName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -134,14 +135,14 @@ async function parseLogFile(filePath, onRecord) {
             continue;
         }
 
-        // 非 Header 行逻辑
+        // 非 Header 行逻辑 (处理如 >SQL执行信息: 等行)
         if (!currentRecord) {
             if (line.includes('SQL执行信息:')) {
                 currentRecord = {
                     id: 0,
-                    log_time: '',
-                    trace_id: '-',
-                    thread_name: '-',
+                    log_time: lastHeaderInfo.logTime,
+                    trace_id: lastHeaderInfo.traceId,
+                    thread_name: lastHeaderInfo.threadName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -150,7 +151,6 @@ async function parseLogFile(filePath, onRecord) {
                     full_sql: ''
                 };
             } else {
-                // 不处于 SQL 录制状态且非 SQL 标志行，忽略
                 continue;
             }
         }

@@ -138,7 +138,6 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     assert.strictEqual(Number(summary.total_sqls), 2749);
     assert.strictEqual(Number(summary.total_traces), 205);
     
-    // 关键修正：最高慢 SQL 耗时准确解析为 3165 ms！
     assert.strictEqual(summary.max_exec_time_ms, 3165);
 
     assert.strictEqual(topRepeated.rows[0].sql_template, 'update `SYS_Lock` set Slock=1 where UniqueKey=?');
@@ -147,7 +146,6 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     assert.strictEqual(topRepeated.rows[1].sql_template, 'SELECT Role FROM SYS_OperatorRole Where SOID= ?');
     assert.strictEqual(Number(topRepeated.rows[1].count), 133);
 
-    // 验证 Top 1 慢 SQL 执行耗时为 3165 ms
     assert.strictEqual(topSlow.rows[0].exec_time_ms, 3165);
 });
 
@@ -159,4 +157,22 @@ test('8. compressSqlColumns SQL多列名精简压缩算法测试', () => {
 
     const shortSql = 'SELECT Role FROM SYS_OperatorRole Where SOID= ?';
     assert.strictEqual(compressSqlColumns(shortSql), shortSql);
+});
+
+test('9. GeneralDBManager 类名日志 TraceID 与 时间提取测试', async () => {
+    const logContent = `2026-08-12 16:04:22.515 684794180481300 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [Main_9ckgsuc21703760lag6ndr3-0] [9ckgsuc21703760lag6ndr3-1] [-] [main] com.bokesoft.yes.mid.connection.dbmanager.GeneralDBManager 
+>SQL执行信息:影响行数:[132669 rows]      执行时间:[3165ms/TimeCostLevel100ms200ms500ms1s2s] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@19cce603] 
+>SQL语句:[select COLUMN_NAME,TABLE_NAME,DATA_TYPE from information_schema.COLUMNS where TABLE_SCHEMA = ?]`;
+
+    const tempFilePath = path.join(__dirname, 'test_general_db.log');
+    fs.writeFileSync(tempFilePath, logContent, 'utf-8');
+
+    const records = [];
+    await parseLogFile(tempFilePath, (r) => records.push(r));
+    fs.unlinkSync(tempFilePath);
+
+    assert.strictEqual(records.length, 1);
+    assert.strictEqual(records[0].log_time, '2026-08-12 16:04:22.515');
+    assert.strictEqual(records[0].trace_id, 'Main_9ckgsuc21703760lag6ndr3-0');
+    assert.strictEqual(records[0].exec_time_ms, 3165);
 });
