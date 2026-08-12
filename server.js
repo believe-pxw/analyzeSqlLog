@@ -512,6 +512,8 @@ function getDashboardHtml() {
         let curSlowPageSize = 20;
         let totalSlowCount = 0;
 
+        let sqlClickTimer = null;
+
         async function init() {
             try {
                 const res = await fetch('/api/summary');
@@ -568,27 +570,35 @@ function getDashboardHtml() {
         }
 
         /**
-         * 单击：展开 / 收起 SQL 列名
+         * 单击：延时 220ms 触发展开/收起，避免触发双击防冲突
          */
         function handleSqlClick(div) {
-            const fullSql = div.getAttribute('data-full');
-            const briefSql = div.getAttribute('data-brief');
-            if (!fullSql || !briefSql || briefSql === fullSql) return;
+            if (sqlClickTimer) clearTimeout(sqlClickTimer);
+            sqlClickTimer = setTimeout(() => {
+                const fullSql = div.getAttribute('data-full');
+                const briefSql = div.getAttribute('data-brief');
+                if (!fullSql || !briefSql || briefSql === fullSql) return;
 
-            const isExpanded = div.getAttribute('data-expanded') === 'true';
-            if (isExpanded) {
-                div.innerHTML = escapeHtml(briefSql);
-                div.setAttribute('data-expanded', 'false');
-            } else {
-                div.innerHTML = escapeHtml(fullSql);
-                div.setAttribute('data-expanded', 'true');
-            }
+                const isExpanded = div.getAttribute('data-expanded') === 'true';
+                if (isExpanded) {
+                    div.innerHTML = escapeHtml(briefSql);
+                    div.setAttribute('data-expanded', 'false');
+                } else {
+                    div.innerHTML = escapeHtml(fullSql);
+                    div.setAttribute('data-expanded', 'true');
+                }
+            }, 220);
         }
 
         /**
-         * 双击：自动选中文本框内全部 SQL 文本，复制与否完全交给用户
+         * 双击：立刻取消单击的延时定时器，完美解决单双击冲突，仅执行全选中文字！
          */
         function handleSqlDblClick(div) {
+            if (sqlClickTimer) {
+                clearTimeout(sqlClickTimer);
+                sqlClickTimer = null;
+            }
+
             const range = document.createRange();
             range.selectNodeContents(div);
             const selection = window.getSelection();
