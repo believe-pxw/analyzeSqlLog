@@ -1,0 +1,16 @@
+2026-08-12 13:12:00.062 674451727986200 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [gu4ucsgp17037514refkk0f-0] [gu4ucsgp17037514refkk0f-1] [-] [YigoQuartzScheduler_Worker-14] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog 
+>SQL执行信息:影响行数:[0 rows]      执行时间:[0ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@16e1a0ef] 
+>SQL语句:[select OID, VerID from EFI_VoucherNBalance_INCR order by GroupId limit ?, ?] 
+>SQL参数:[#0:0 #1:1000]
+>完整SQL:[select OID, VerID from EFI_VoucherNBalance_INCR order by GroupId limit  0,  1000]
+
+2026-08-12 13:44:26.250 676397918000000 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [hcpc9te51703753lmmmmybe-0] [hcpc9te51703753lmmmmybe-1] [-] [Worker-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog 
+>SQL执行信息:影响行数:[1 rows]      执行时间:[5ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@26b4e672] 
+>SQL语句:[select IPServerPort ,IPServerAddress,Code from BK_TaskGroup ]
+
+2026-08-12 13:44:26.259 676397923816800 ERROR [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [hcpc9te51703753lmmmmybe-0] [hcpc9te51703753lmmmmybe-1] [-] [Worker-2] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog 
+>SQL执行信息:影响行数:[0 rows]      执行时间:[12ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@26b4e672] 
+>SQL语句:[select * from (select 
+>                                    WF_Workitem.WorkItemID as WorkItemID,
+>                                    WF_Workitem.WorkItemName as WorkItemName
+>                                    from WF_Workitem) ERPIndex ]
