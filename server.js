@@ -8,25 +8,24 @@ function safeJsonStringify(obj) {
 }
 
 /**
- * 强健的列名精简算法：无论大写小写、换行缩进，将 SELECT 与 FROM 之间的冗长列名区间 100% 替换为 select ... from
+ * 强健的列名精简算法：采用全字界定符 \bfrom\b 锁定 SQL 真正 FROM 语句，绝不把列名中含有的 Formula/From/FromDate 等字段误认为 FROM
  */
 function compressSqlColumns(sql) {
     if (!sql) return '';
     const str = sql.trim();
-    const lower = str.toLowerCase();
-    
-    const selectIdx = lower.indexOf('select');
-    const fromIdx = lower.indexOf('from');
 
-    if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-        const selectPart = str.substring(0, selectIdx + 6);
-        const cols = str.substring(selectIdx + 6, fromIdx);
-        const fromTail = str.substring(fromIdx);
+    // 匹配全字 select 与全字 from
+    const match = str.match(/^(\s*select\s+)([\s\S]+?)(\s+from\b[\s\S]+)$/i);
+    if (match) {
+        const selectHead = match[1];
+        const cols = match[2];
+        const fromTail = match[3];
 
         if (cols.includes(',') || cols.trim().length > 15) {
-            return selectPart + ' ... ' + fromTail.trim();
+            return selectHead + '... ' + fromTail.trim();
         }
     }
+
     return str;
 }
 
@@ -614,23 +613,20 @@ function getDashboardHtml() {
         }
 
         /**
-         * 100% 精准的列名精简算法：查找 SELECT 与 FROM 替换为 select ... from
+         * 100% 精准的列名精简算法：采用 \bfrom\b 全字界定符，绝对不把列名中含有的 Formula/From/FromDate 等字段误认为 FROM
          */
         function compressSqlColumns(sql) {
             if (!sql) return '';
             const str = sql.trim();
-            const lower = str.toLowerCase();
 
-            const selectIdx = lower.indexOf('select');
-            const fromIdx = lower.indexOf('from');
-
-            if (selectIdx !== -1 && fromIdx !== -1 && fromIdx > selectIdx) {
-                const selectPart = str.substring(0, selectIdx + 6);
-                const cols = str.substring(selectIdx + 6, fromIdx);
-                const fromPart = str.substring(fromIdx);
+            const match = str.match(/^(\s*select\s+)([\s\S]+?)(\s+from\b[\s\S]+)$/i);
+            if (match) {
+                const selectHead = match[1];
+                const cols = match[2];
+                const fromTail = match[3];
 
                 if (cols.includes(',') || cols.trim().length > 15) {
-                    return selectPart + ' ... ' + fromPart.trim();
+                    return selectHead + '... ' + fromTail.trim();
                 }
             }
             return str;

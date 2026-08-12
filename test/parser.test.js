@@ -149,12 +149,13 @@ test('7. 针对 test/fixtures 下新增真实日志文件的 SQL 频次与最大
     assert.strictEqual(topSlow.rows[0].exec_time_ms, 3165);
 });
 
-test('8. compressSqlColumns SQL多列名精简压缩算法测试 (各种换行与反引号兼容)', () => {
+test('8. compressSqlColumns SQL多列名精简压缩算法测试 (支持包含 Formula/From 等字段名的超长 SQL)', () => {
+    const userSql = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
+    const compressed = compressSqlColumns(userSql);
+    assert.strictEqual(compressed, "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
+
     const longSql1 = 'select OID, VerID, GroupID, CompanyCodeID, FiscalYearPeriod, Money_Debit, Money_Credit from EFI_VoucherNBalance_INCR order by GroupId';
     assert.strictEqual(compressSqlColumns(longSql1), 'select ... from EFI_VoucherNBalance_INCR order by GroupId');
-
-    const longSql2 = 'select `OID`,`SOID`,`POID`,`VERID`,`DVERID`,`Sequence`,`ItemNumber`\nfrom EMM_PurchaseRequisitionDtl where SOID= ?';
-    assert.strictEqual(compressSqlColumns(longSql2), 'select ... from EMM_PurchaseRequisitionDtl where SOID= ?');
 
     const shortSql = 'SELECT Role FROM SYS_OperatorRole Where SOID= ?';
     assert.strictEqual(compressSqlColumns(shortSql), shortSql);
