@@ -8,13 +8,13 @@ function safeJsonStringify(obj) {
 }
 
 /**
- * 强健无死角的列名精简算法：采用 \bselect\b 与 \bfrom\b 锁定列名区间，只要包含逗号或列长度>15，100% 精准折叠！
+ * 强健无死角的列名精简算法：采用 \bfrom\b 锁定列名区间，只要包含逗号或列长度>15，100% 精准折叠！
  */
 function compressSqlColumns(sql) {
     if (!sql) return '';
     const str = sql.trim();
 
-    // 宽松匹配 select ... from 结构 (去掉开头的 ^ 锚点以防前置换行)
+    // 宽松匹配 select ... from 结构
     const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
     if (match) {
         const selectHead = match[1];
@@ -27,6 +27,14 @@ function compressSqlColumns(sql) {
     }
 
     return str;
+}
+
+function attachBriefSql(rows, sqlKey = 'sql_template') {
+    if (!rows || !Array.isArray(rows)) return [];
+    return rows.map(r => ({
+        ...r,
+        brief_sql: compressSqlColumns(r.full_sql || r[sqlKey] || '')
+    }));
 }
 
 function createServer(dbInstance, parseStats, port = 3000) {
@@ -61,7 +69,8 @@ function createServer(dbInstance, parseStats, port = 3000) {
                     const excludeBg = parsedUrl.query.excludeBackground === 'true';
                     
                     const result = await dbInstance.getTopRepeated(page, pageSize, traceId, excludeBg);
-                    return res.end(safeJsonStringify({ success: true, data: result.rows, total: result.total, page: result.page, pageSize: result.pageSize }));
+                    const processedRows = attachBriefSql(result.rows, 'sql_template');
+                    return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
 
                 if (pathname === '/api/top-slow' && method === 'GET') {
@@ -71,19 +80,22 @@ function createServer(dbInstance, parseStats, port = 3000) {
                     const excludeBg = parsedUrl.query.excludeBackground === 'true';
 
                     const result = await dbInstance.getTopSlow(page, pageSize, traceId, excludeBg);
-                    return res.end(safeJsonStringify({ success: true, data: result.rows, total: result.total, page: result.page, pageSize: result.pageSize }));
+                    const processedRows = attachBriefSql(result.rows, 'full_sql');
+                    return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
 
                 if (pathname === '/api/trace' && method === 'GET') {
                     const traceId = parsedUrl.query.traceId || '';
                     const rows = await dbInstance.getByTraceId(traceId);
-                    return res.end(safeJsonStringify({ success: true, data: rows }));
+                    const processedRows = attachBriefSql(rows, 'full_sql');
+                    return res.end(safeJsonStringify({ success: true, data: processedRows }));
                 }
 
                 if (pathname === '/api/diagnostics' && method === 'GET') {
                     const traceId = parsedUrl.query.traceId || '';
                     const rows = await dbInstance.getDiagnostics(traceId);
-                    return res.end(safeJsonStringify({ success: true, data: rows }));
+                    const processedRows = attachBriefSql(rows, 'sql_template');
+                    return res.end(safeJsonStringify({ success: true, data: processedRows }));
                 }
 
                 res.writeHead(404);
@@ -438,7 +450,7 @@ function getDashboardHtml() {
         <!-- 1. N+1 诊断 Panel (默认 Active) -->
         <div id="panel-diagnose" class="panel active">
             <div class="diagnose-banner">
-                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），精准抓取在【同一数据库事务内】重复执行 5 次及以上的 SQL 模板，定位代码循环查库问题。
+                <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），抓取在【同一数据库事务内】重复执行 5 次及以上的 SQL 模板。
             </div>
             <div class="toolbar">
                 <input type="text" id="trace-diagnose" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
@@ -613,26 +625,6 @@ function getDashboardHtml() {
         }
 
         /**
-         * 100% 精准无死角列名折叠算法：采用 \bfrom\b 绑定，只要包含逗号或长度>15，精准折叠
-         */
-        function compressSqlColumns(sql) {
-            if (!sql) return '';
-            const str = sql.trim();
-
-            const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
-            if (match) {
-                const selectHead = match[1];
-                const cols = match[2];
-                const fromPart = match[3];
-
-                if (cols.includes(',') || cols.trim().length > 15) {
-                    return selectHead + '... ' + fromPart.trim();
-                }
-            }
-            return str;
-        }
-
-        /**
          * 左键：0ms 瞬间展开 / 收起
          */
         function handleSqlClick(div) {
@@ -734,7 +726,7 @@ function getDashboardHtml() {
             const offset = (curRepeatedPage - 1) * curRepeatedPageSize;
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.sql_template || '';
-                const briefSql = compressSqlColumns(fullSql);
+                const briefSql = r.brief_sql || fullSql;
 
                 return \`
                 <tr>
@@ -785,7 +777,7 @@ function getDashboardHtml() {
             const offset = (curSlowPage - 1) * curSlowPageSize;
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
-                const briefSql = compressSqlColumns(fullSql);
+                const briefSql = r.brief_sql || fullSql;
 
                 return \`
                 <tr>
@@ -874,7 +866,7 @@ function getDashboardHtml() {
 
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
-                const briefSql = compressSqlColumns(fullSql);
+                const briefSql = r.brief_sql || fullSql;
 
                 return \`
                 <tr>
@@ -930,7 +922,7 @@ function getDashboardHtml() {
                 
                 const dbManagerStr = (r.db_manager || '').split('.').pop() || r.db_manager;
                 const fullSql = r.sql_template || '';
-                const briefSql = compressSqlColumns(fullSql);
+                const briefSql = r.brief_sql || fullSql;
 
                 return \`
                 <tr>
