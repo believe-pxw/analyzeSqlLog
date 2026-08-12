@@ -86,7 +86,7 @@ function cleanSqlText(text) {
  * @returns {Promise<{totalLines: number, totalRecords: number}>}
  */
 async function parseLogFile(filePath, onRecord, startRecordId = 0) {
-    const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 512 * 1024 });
+    const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 });
     const rl = readline.createInterface({
         input: fileStream,
         crlfDelay: Infinity
@@ -114,7 +114,10 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
             if (currentRecord.sql_template || currentRecord.full_sql) {
                 totalRecords++;
                 currentRecord.id = totalRecords;
-                await onRecord(currentRecord);
+                const res = onRecord(currentRecord);
+                if (res && typeof res.then === 'function') {
+                    await res;
+                }
             }
         }
         currentRecord = null;
@@ -278,10 +281,9 @@ async function parseLogs(targetPath, onRecord) {
         return { totalFiles: 0, totalLines: 0, totalRecords: 0 };
     }
 
-    // 💡 黄金并发度策略：永远预留 1~2 个核心给 macOS 系统与 Node.js 主线程 (DuckDB 写入)，并发上限封顶为 6 线程
-    const availableCpus = os.cpus() ? os.cpus().length : 4;
-    const maxOptimalWorkers = Math.max(1, Math.min(availableCpus - 1, 6));
-    const maxWorkers = Math.min(maxOptimalWorkers, files.length);
+    // 🚀 极限性能拉满：解锁全 CPU 核心全速并发解析
+    const cpuCount = os.cpus() ? os.cpus().length : 4;
+    const maxWorkers = Math.min(cpuCount, files.length);
 
     // 单文件或 Worker 内部或单核设备降级处理
     if (files.length <= 1 || !isMainThread || maxWorkers <= 1) {
@@ -297,7 +299,7 @@ async function parseLogs(targetPath, onRecord) {
         return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords };
     }
 
-    // 🚀 多核 Worker 线程池并行分分发处理
+    // 🚀 多核 Worker 线程池全速分发处理
     const chunks = Array.from({ length: maxWorkers }, () => []);
     files.forEach((f, idx) => chunks[idx % maxWorkers].push(f));
 
@@ -314,10 +316,15 @@ async function parseLogs(targetPath, onRecord) {
 
             worker.on('message', async (msg) => {
                 if (msg.type === 'batch') {
-                    for (const record of msg.records) {
+                    const records = msg.records;
+                    const len = records.length;
+                    for (let i = 0; i < len; i++) {
                         grandTotalRecords++;
-                        record.id = grandTotalRecords;
-                        await onRecord(record);
+                        records[i].id = grandTotalRecords;
+                        const res = onRecord(records[i]);
+                        if (res && typeof res.then === 'function') {
+                            await res;
+                        }
                     }
                 } else if (msg.type === 'done') {
                     grandTotalLines += msg.totalLines;

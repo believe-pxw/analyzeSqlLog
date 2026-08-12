@@ -46,13 +46,13 @@ async function main() {
     let batch = [];
     const BATCH_SIZE = 10000;
 
-    // 流式解析并批量写入 DuckDB
-    const parseResult = await parseLogs(targetPath, async (record) => {
+    // 流式解析并批量写入 DuckDB (微任务 0 开销优化)
+    const parseResult = await parseLogs(targetPath, (record) => {
         batch.push(record);
         if (batch.length >= BATCH_SIZE) {
             const toInsert = batch;
             batch = [];
-            await db.insertBatch(toInsert);
+            return db.insertBatch(toInsert);
         }
     });
 

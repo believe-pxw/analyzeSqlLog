@@ -75,7 +75,7 @@ class SqlLogDatabase {
 
     async _doInsertBatch(records) {
         if (!records || records.length === 0) return;
-        const CHUNK_SIZE = 1000;
+        const CHUNK_SIZE = 2000;
         await this.query('BEGIN TRANSACTION');
         try {
             for (let i = 0; i < records.length; i += CHUNK_SIZE) {
