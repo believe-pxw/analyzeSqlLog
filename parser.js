@@ -1,6 +1,8 @@
 const fs = require('fs');
 const readline = require('readline');
 const path = require('path');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const os = require('os');
 
 /**
  * 高性能解析时间耗时字符串 (如 "0ms", "3165ms/TimeCostLevel100ms200ms500ms1s2s", "1.5s/TimeCostLevel...")
@@ -241,7 +243,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
 }
 
 /**
- * 遍历扫描指定目录/文件列表 (递归深度扫描文件名包含 server-info 或 server-error 的日志文件)
+ * 遍历扫描指定目录/文件列表 (支持多核 Worker 线程池并行深度扫描)
  */
 async function parseLogs(targetPath, onRecord) {
     let files = [];
@@ -272,16 +274,92 @@ async function parseLogs(targetPath, onRecord) {
         collectFiles(targetPath);
     }
 
+    if (files.length === 0) {
+        return { totalFiles: 0, totalLines: 0, totalRecords: 0 };
+    }
+
+    const cpuCount = os.cpus() ? os.cpus().length : 4;
+    const maxWorkers = Math.min(cpuCount, files.length);
+
+    // 单文件或 Worker 内部或单核设备降级处理
+    if (files.length <= 1 || !isMainThread || maxWorkers <= 1) {
+        let grandTotalLines = 0;
+        let grandTotalRecords = 0;
+
+        for (const file of files) {
+            const result = await parseLogFile(file, onRecord, grandTotalRecords);
+            grandTotalLines += result.totalLines;
+            grandTotalRecords += result.totalRecords;
+        }
+
+        return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords };
+    }
+
+    // 🚀 多核 Worker 线程池并行分分发处理
+    const chunks = Array.from({ length: maxWorkers }, () => []);
+    files.forEach((f, idx) => chunks[idx % maxWorkers].push(f));
+
     let grandTotalLines = 0;
     let grandTotalRecords = 0;
 
-    for (const file of files) {
-        const result = await parseLogFile(file, onRecord, grandTotalRecords);
-        grandTotalLines += result.totalLines;
-        grandTotalRecords += result.totalRecords;
-    }
+    const workerPromises = chunks.map((workerFiles) => {
+        return new Promise((resolve, reject) => {
+            if (workerFiles.length === 0) return resolve();
+
+            const worker = new Worker(__filename, {
+                workerData: { files: workerFiles }
+            });
+
+            worker.on('message', async (msg) => {
+                if (msg.type === 'batch') {
+                    for (const record of msg.records) {
+                        grandTotalRecords++;
+                        record.id = grandTotalRecords;
+                        await onRecord(record);
+                    }
+                } else if (msg.type === 'done') {
+                    grandTotalLines += msg.totalLines;
+                    resolve();
+                }
+            });
+
+            worker.on('error', reject);
+            worker.on('exit', (code) => {
+                if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+            });
+        });
+    });
+
+    await Promise.all(workerPromises);
 
     return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords };
+}
+
+// 🚀 Worker 线程独立子进程入口
+if (!isMainThread && workerData && workerData.files) {
+    (async () => {
+        let totalLines = 0;
+        let totalRecords = 0;
+        for (const file of workerData.files) {
+            let batch = [];
+            const result = await parseLogFile(file, async (record) => {
+                batch.push(record);
+                if (batch.length >= 10000) {
+                    parentPort.postMessage({ type: 'batch', records: batch });
+                    batch = [];
+                }
+            }, 0);
+
+            if (batch.length > 0) {
+                parentPort.postMessage({ type: 'batch', records: batch });
+                batch = [];
+            }
+
+            totalLines += result.totalLines;
+            totalRecords += result.totalRecords;
+        }
+        parentPort.postMessage({ type: 'done', totalLines, totalRecords });
+    })();
 }
 
 module.exports = {

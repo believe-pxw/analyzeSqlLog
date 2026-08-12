@@ -19,6 +19,7 @@ class SqlLogDatabase {
         this.dbPath = dbPath;
         this.db = new duckdb.Database(dbPath);
         this.conn = this.db.connect();
+        this.insertChain = Promise.resolve();
     }
 
     /**
@@ -55,11 +56,24 @@ class SqlLogDatabase {
     }
 
     /**
-     * 批量高效插入 SQL 记录
+     * 批量高效插入 SQL 记录 (支持多 Worker 消息串行队列防护)
      */
     async insertBatch(records) {
         if (!records || records.length === 0) return;
 
+        return new Promise((resolve, reject) => {
+            this.insertChain = this.insertChain.then(async () => {
+                try {
+                    await this._doInsertBatch(records);
+                    resolve();
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        });
+    }
+
+    async _doInsertBatch(records) {
         await this.query('BEGIN TRANSACTION');
         try {
             await new Promise((resolve, reject) => {

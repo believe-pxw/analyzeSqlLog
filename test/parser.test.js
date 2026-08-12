@@ -291,3 +291,26 @@ test('15. 独立新增测试：onRecord 异步背压回调等待机制断言测�
     fs.unlinkSync(tempFilePath);
     assert.strictEqual(maxConcurrent, 0);
 });
+
+test('16. 独立新增测试：Worker Threads 多核并行文件解析完整校验测试', async () => {
+    const tempDir = path.join(__dirname, 'test_parallel_logs_dir');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+
+    const f1 = path.join(tempDir, 'p1-server-info.log');
+    const f2 = path.join(tempDir, 'p2-server-error.log');
+
+    fs.writeFileSync(f1, '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-p1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[1 rows] 执行时间:[10ms]\n>SQL语句:[select * from table1]', 'utf-8');
+    fs.writeFileSync(f2, '2026-08-12 10:00:01.000 ERROR [DevNode] [] [] [] [t-p2] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[2 rows] 执行时间:[20ms]\n>SQL语句:[select * from table2]', 'utf-8');
+
+    const records = [];
+    const res = await parseLogs(tempDir, (r) => records.push(r));
+
+    assert.strictEqual(res.totalFiles, 2);
+    assert.strictEqual(records.length, 2);
+    assert.strictEqual(records[0].id, 1);
+    assert.strictEqual(records[1].id, 2);
+
+    fs.unlinkSync(f1);
+    fs.unlinkSync(f2);
+    fs.rmdirSync(tempDir);
+});
