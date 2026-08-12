@@ -502,11 +502,16 @@ function getDashboardHtml() {
             </div>
         </div>
 
-        <!-- 3. Trace 链路 Panel -->
+        <!-- 3. Trace 链路 Panel (支持耗时排序) -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-input" class="search-input" style="max-width: 300px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
-                <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="filterTraceTable()">
+                <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="sortAndRenderTraceTable()">
+                <select id="trace-sort-select" class="page-select" style="padding: 5px 10px; font-size: 13px;" onchange="sortAndRenderTraceTable()">
+                    <option value="default">⏱️ 默认日志时间顺序</option>
+                    <option value="cost-desc">🐢 按耗时从大到小 (降序)</option>
+                    <option value="cost-asc">⚡ 按耗时从小到大 (升序)</option>
+                </select>
                 <button class="btn" onclick="loadTraceData()">搜索 Trace 链路</button>
             </div>
             <div id="trace-summary" style="margin-bottom: 8px; font-size: 13px; color: var(--accent); font-weight: 600;"></div>
@@ -516,7 +521,7 @@ function getDashboardHtml() {
                         <tr>
                             <th style="width: 50px;">序号</th>
                             <th style="width: 150px;">时间</th>
-                            <th style="width: 90px;">耗时 (ms)</th>
+                            <th style="width: 110px; cursor: pointer; user-select: none;" onclick="toggleTraceCostSort()" title="点击切换耗时排序">耗时 (ms) ↕</th>
                             <th style="width: 80px;">影响行数</th>
                             <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
@@ -846,8 +851,43 @@ function getDashboardHtml() {
             const json = await res.json();
             if (json.success) {
                 rawTraceData = json.data;
-                renderTraceTable(rawTraceData);
+                sortAndRenderTraceTable();
             }
+        }
+
+        /**
+         * Trace 链路耗时排序与检索过滤逻辑
+         */
+        function sortAndRenderTraceTable() {
+            if (!rawTraceData) return;
+            const sortMode = document.getElementById('trace-sort-select').value;
+            const q = document.getElementById('search-trace-sql').value.toLowerCase();
+
+            let sorted = [...rawTraceData];
+            if (sortMode === 'cost-desc') {
+                sorted.sort((a, b) => (b.exec_time_ms || 0) - (a.exec_time_ms || 0));
+            } else if (sortMode === 'cost-asc') {
+                sorted.sort((a, b) => (a.exec_time_ms || 0) - (b.exec_time_ms || 0));
+            }
+
+            if (q) {
+                sorted = sorted.filter(r => 
+                    (r.full_sql || '').toLowerCase().includes(q) || 
+                    (r.sql_template || '').toLowerCase().includes(q)
+                );
+            }
+
+            renderTraceTable(sorted);
+        }
+
+        function toggleTraceCostSort() {
+            const sel = document.getElementById('trace-sort-select');
+            if (sel.value === 'cost-desc') {
+                sel.value = 'cost-asc';
+            } else {
+                sel.value = 'cost-desc';
+            }
+            sortAndRenderTraceTable();
         }
 
         function renderTraceTable(data) {
@@ -861,8 +901,8 @@ function getDashboardHtml() {
                 return;
             }
 
-            const totalCost = data.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
-            summary.innerText = \`Trace [ \${traceId} ] 共查到 \${data.length} 条符合条件的 SQL 记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms\`;
+            const totalCost = rawTraceData.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
+            summary.innerText = \`Trace [ \${traceId} ] 共查到 \${rawTraceData.length} 条 SQL 记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms (当前显示 \${data.length} 条)\`;
 
             tbody.innerHTML = data.map((r, i) => {
                 const fullSql = r.full_sql || r.sql_template || '';
@@ -880,16 +920,6 @@ function getDashboardHtml() {
                 </tr>
             \`;
             }).join('');
-        }
-
-        function filterTraceTable() {
-            const q = document.getElementById('search-trace-sql').value.toLowerCase();
-            if (!rawTraceData) return;
-            const filtered = rawTraceData.filter(r => 
-                (r.full_sql || '').toLowerCase().includes(q) || 
-                (r.sql_template || '').toLowerCase().includes(q)
-            );
-            renderTraceTable(filtered);
         }
 
         function jumpToTrace(traceId) {

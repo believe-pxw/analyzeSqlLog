@@ -182,3 +182,24 @@ test('10. 独立新增测试：全量复杂多列名 SQL 100% 精确折叠为 se
     const userSql2 = "select `OID`,`SOID`,`POID`,`ConditionbaseValueFormula`,`AlternativeCalculationFormula` from EMM_PO_ConditionRecord where SOID=  1993072";
     assert.strictEqual(compressSqlColumns(userSql2), "select ... from EMM_PO_ConditionRecord where SOID=  1993072");
 });
+
+test('11. 独立新增测试：Trace 链路数据按耗时升降序逻辑校验', async () => {
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    await db.insertBatch([
+        { id: 1, log_time: '2026-08-12 10:00:00.000', trace_id: 't-sort', thread_name: 'th-1', exec_time_ms: 10, result_rows: 1, db_manager: 'mysql', sql_template: 'SELECT 1', sql_params: '', full_sql: 'SELECT 1' },
+        { id: 2, log_time: '2026-08-12 10:00:01.000', trace_id: 't-sort', thread_name: 'th-1', exec_time_ms: 300, result_rows: 1, db_manager: 'mysql', sql_template: 'SELECT 2', sql_params: '', full_sql: 'SELECT 2' },
+        { id: 3, log_time: '2026-08-12 10:00:02.000', trace_id: 't-sort', thread_name: 'th-1', exec_time_ms: 50, result_rows: 1, db_manager: 'mysql', sql_template: 'SELECT 3', sql_params: '', full_sql: 'SELECT 3' }
+    ]);
+
+    const traceRows = await db.getByTraceId('t-sort');
+    assert.strictEqual(traceRows.length, 3);
+    assert.strictEqual(traceRows[0].exec_time_ms, 10);
+
+    // 内存降序排序测试
+    const descSorted = [...traceRows].sort((a, b) => b.exec_time_ms - a.exec_time_ms);
+    assert.strictEqual(descSorted[0].exec_time_ms, 300);
+    assert.strictEqual(descSorted[1].exec_time_ms, 50);
+    assert.strictEqual(descSorted[2].exec_time_ms, 10);
+});
