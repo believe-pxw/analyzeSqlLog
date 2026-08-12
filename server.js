@@ -84,21 +84,6 @@ function createServer(dbInstance, parseStats, port = 3000) {
                     return res.end(safeJsonStringify({ success: true, data: rows }));
                 }
 
-                if (pathname === '/api/query' && method === 'POST') {
-                    let body = '';
-                    req.on('data', chunk => body += chunk);
-                    req.on('end', async () => {
-                        try {
-                            const json = JSON.parse(body);
-                            const rows = await dbInstance.query(json.sql);
-                            return res.end(safeJsonStringify({ success: true, data: rows }));
-                        } catch (err) {
-                            return res.end(safeJsonStringify({ success: false, error: err.message }));
-                        }
-                    });
-                    return;
-                }
-
                 res.writeHead(404);
                 return res.end(safeJsonStringify({ success: false, error: 'Endpoint not found' }));
             } catch (err) {
@@ -340,22 +325,6 @@ function getDashboardHtml() {
         .tag-slow { color: var(--accent-red); font-weight: 700; }
         .tag-freq { color: var(--accent-yellow); font-weight: 700; }
 
-        .query-box {
-            width: 100%;
-            height: 110px;
-            background: #ffffff;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px;
-            color: #0284c7;
-            font-family: monospace;
-            font-size: 14px;
-            margin-bottom: 12px;
-            resize: vertical;
-            box-shadow: var(--shadow);
-        }
-        .query-box:focus { outline: none; border-color: var(--accent); }
-
         .copy-btn {
             background: #e2e8f0;
             border: 1px solid #cbd5e1;
@@ -409,7 +378,7 @@ function getDashboardHtml() {
         <header>
             <div class="title">
                 <h1>SQL 日志分析器</h1>
-                <span class="badge">DuckDB 极速分析版</span>
+                <span class="badge">DuckDB 纯内存极速分析版</span>
             </div>
             <div id="parse-time" style="font-size: 13px; color: var(--text-muted);">数据加载完成</div>
         </header>
@@ -420,7 +389,6 @@ function getDashboardHtml() {
             <button class="tab-btn" onclick="switchTab('overview')">📈 概览统计分析</button>
             <button class="tab-btn" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
             <button class="tab-btn" onclick="switchTab('diagnose')">💡 N+1 冗余诊断</button>
-            <button class="tab-btn" onclick="switchTab('query')">🔍 自由 DuckDB SQL 控制台</button>
         </div>
 
         <!-- 频次榜 Panel -->
@@ -495,7 +463,8 @@ function getDashboardHtml() {
         <!-- Trace 链路 Panel -->
         <div id="panel-trace" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-input" class="search-input" placeholder="输入特定 TraceID (如 hcpc9te51703753lmmmmybe-0)">
+                <input type="text" id="trace-input" class="search-input" style="max-width: 320px;" placeholder="输入 TraceID (如 Main_9ckgsuc...)" onchange="loadTraceData()">
+                <input type="text" id="search-trace-sql" class="search-input" placeholder="在当前 Trace 中按 SQL 语句/关键词过滤 (如 select / EMM_...)" oninput="filterTraceTable()">
                 <button class="btn" onclick="loadTraceData()">搜索 Trace 链路</button>
             </div>
             <div id="trace-summary" style="margin-bottom: 12px; font-size: 14px; color: var(--accent); font-weight: 600;"></div>
@@ -532,23 +501,13 @@ function getDashboardHtml() {
                 </table>
             </div>
         </div>
-
-        <!-- DuckDB 自由查询 Panel -->
-        <div id="panel-query" class="panel">
-            <textarea id="sql-query" class="query-box" placeholder="输入 DuckDB SQL...">SELECT trace_id, count(*) as count, sum(exec_time_ms) as total_ms FROM sqllogs GROUP BY trace_id ORDER BY count DESC LIMIT 10;</textarea>
-            <button class="btn" onclick="runCustomSql()">运行 DuckDB SQL</button>
-            <div style="margin-top: 16px;" class="table-container">
-                <table id="custom-query-table">
-                    <thead id="custom-query-thead"></thead>
-                    <tbody id="custom-query-tbody"><tr><td style="text-align: center;">运行 SQL 后在此处显示结果</td></tr></tbody>
-                </table>
-            </div>
-        </div>
     </div>
 
     <script>
         let rawRepeatedData = [];
         let rawSlowData = [];
+        let rawTraceData = [];
+
         let curRepeatedPage = 1;
         let curRepeatedPageSize = 20;
         let totalRepeatedCount = 0;
@@ -785,42 +744,57 @@ function getDashboardHtml() {
             const res = await fetch('/api/trace?traceId=' + encodeURIComponent(traceId));
             const json = await res.json();
             if (json.success) {
-                const data = json.data;
-                const tbody = document.getElementById('trace-tbody');
-                const summary = document.getElementById('trace-summary');
-                
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">未查找到该 TraceID 的 SQL 记录</td></tr>';
-                    summary.innerText = '';
-                    return;
-                }
-
-                const totalCost = data.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
-                summary.innerText = \`Trace [ \${traceId} ] 包含 \${data.length} 条 SQL 执行记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms\`;
-
-                tbody.innerHTML = data.map((r, i) => {
-                    const fullSql = r.full_sql || r.sql_template || '';
-                    const briefSql = compressSqlColumns(fullSql);
-                    const hasAbbr = briefSql !== fullSql;
-                    const elementId = 'trace-sql-' + i;
-
-                    return \`
-                    <tr>
-                        <td>\${i + 1}</td>
-                        <td>\${r.log_time}</td>
-                        <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
-                        <td>\${r.result_rows}</td>
-                        <td>
-                            <div class="sql-box-wrapper">
-                                \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
-                                <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
-                                <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
-                            </div>
-                        </td>
-                    </tr>
-                \`;
-                }).join('');
+                rawTraceData = json.data;
+                renderTraceTable(rawTraceData);
             }
+        }
+
+        function renderTraceTable(data) {
+            const tbody = document.getElementById('trace-tbody');
+            const summary = document.getElementById('trace-summary');
+            const traceId = document.getElementById('trace-input').value.trim();
+
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">未查找到符合条件的 SQL 记录</td></tr>';
+                summary.innerText = '';
+                return;
+            }
+
+            const totalCost = data.reduce((acc, curr) => acc + (curr.exec_time_ms || 0), 0);
+            summary.innerText = \`Trace [ \${traceId} ] 共查到 \${data.length} 条符合条件的 SQL 记录，累计 SQL 耗时: \${totalCost.toFixed(2)} ms\`;
+
+            tbody.innerHTML = data.map((r, i) => {
+                const fullSql = r.full_sql || r.sql_template || '';
+                const briefSql = compressSqlColumns(fullSql);
+                const hasAbbr = briefSql !== fullSql;
+                const elementId = 'trace-sql-' + i;
+
+                return \`
+                <tr>
+                    <td>\${i + 1}</td>
+                    <td>\${r.log_time}</td>
+                    <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
+                    <td>\${r.result_rows}</td>
+                    <td>
+                        <div class="sql-box-wrapper">
+                            \${hasAbbr ? \`<button class="sql-toggle-btn" onclick="toggleSql('\${elementId}')" id="btn-\${elementId}">🔍 展开完整列名</button>\` : ''}
+                            <div class="sql-code" id="\${elementId}" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                            <button class="copy-btn" onclick="copyText(\\\`\${escapeJs(fullSql)}\\\`)">复制</button>
+                        </div>
+                    </td>
+                </tr>
+            \`;
+            }).join('');
+        }
+
+        function filterTraceTable() {
+            const q = document.getElementById('search-trace-sql').value.toLowerCase();
+            if (!rawTraceData) return;
+            const filtered = rawTraceData.filter(r => 
+                (r.full_sql || '').toLowerCase().includes(q) || 
+                (r.sql_template || '').toLowerCase().includes(q)
+            );
+            renderTraceTable(filtered);
         }
 
         function jumpToTrace(traceId) {
@@ -851,38 +825,6 @@ function getDashboardHtml() {
                     </tr>
                 \`).join('');
             }
-        }
-
-        async function runCustomSql() {
-            const sql = document.getElementById('sql-query').value.trim();
-            if (!sql) return;
-            const res = await fetch('/api/query', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sql })
-            });
-            const json = await res.json();
-            const thead = document.getElementById('custom-query-thead');
-            const tbody = document.getElementById('custom-query-tbody');
-
-            if (!json.success) {
-                thead.innerHTML = '';
-                tbody.innerHTML = \`<tr><td style="color: var(--accent-red);">SQL 执行失败: \${escapeHtml(json.error)}</td></tr>\`;
-                return;
-            }
-
-            const data = json.data;
-            if (data.length === 0) {
-                thead.innerHTML = '';
-                tbody.innerHTML = '<tr><td style="text-align: center;">Query executed successfully, but returned 0 rows.</td></tr>';
-                return;
-            }
-
-            const keys = Object.keys(data[0]);
-            thead.innerHTML = '<tr>' + keys.map(k => \`<th>\${escapeHtml(k)}</th>\`).join('') + '</tr>';
-            tbody.innerHTML = data.map(row => 
-                '<tr>' + keys.map(k => \`<td>\${escapeHtml(String(row[k] !== undefined ? row[k] : ''))}</td>\`).join('') + '</tr>'
-            ).join('');
         }
 
         function escapeHtml(str) {

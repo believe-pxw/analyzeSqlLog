@@ -40,7 +40,7 @@ async function main() {
     console.log(`\n📂 正在扫描日志路径: ${targetPath}`);
 
     const startTime = Date.now();
-    const db = new SqlLogDatabase();
+    const db = new SqlLogDatabase(':memory:');
     await db.initSchema();
 
     let batch = [];
