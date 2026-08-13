@@ -375,6 +375,7 @@ function getDashboardHtml() {
             box-shadow: var(--shadow);
             border-radius: 8px;
             overflow-x: auto;
+            min-height: 360px;
         }
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
         th, td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
@@ -797,9 +798,9 @@ function getDashboardHtml() {
         }
 
         /**
-         * 强健精准的 Tab 切换高亮控制器
+         * 强健丝滑的 Tab 切换高亮控制器 (支持 skipAutoLoad 防二次重复请求抖动)
          */
-        function switchTab(name) {
+        function switchTab(name, skipAutoLoad = false) {
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if (btn.getAttribute('data-tab') === name) {
@@ -811,10 +812,12 @@ function getDashboardHtml() {
             const targetPanel = document.getElementById('panel-' + name);
             if (targetPanel) targetPanel.classList.add('active');
 
-            if (name === 'repeated') loadRepeated(curRepeatedPage);
-            if (name === 'slow') loadSlow(curSlowPage);
-            if (name === 'diagnose') loadDiagnostics(curDiagnosePage);
-            if (name === 'detail' && currentDetailTemplate) loadDetailData(curDetailPage);
+            if (!skipAutoLoad) {
+                if (name === 'repeated') loadRepeated(curRepeatedPage);
+                if (name === 'slow') loadSlow(curSlowPage);
+                if (name === 'diagnose') loadDiagnostics(curDiagnosePage);
+                if (name === 'detail' && currentDetailTemplate) loadDetailData(curDetailPage);
+            }
         }
 
         /**
@@ -1167,8 +1170,10 @@ function getDashboardHtml() {
         }
 
         function jumpToTrace(traceId) {
-            document.getElementById('trace-input').value = traceId;
-            switchTab('trace');
+            const input = document.getElementById('trace-input');
+            if (input) input.value = traceId;
+            switchTab('trace', true);
+            scrollToTableTop('trace-pagination');
             loadTraceData(1);
         }
 
@@ -1256,7 +1261,8 @@ function getDashboardHtml() {
         function jumpToDetail(sqlTemplate, contextInfo = null) {
             currentDetailTemplate = sqlTemplate;
             currentDetailContext = contextInfo;
-            switchTab('detail');
+            switchTab('detail', true);
+            scrollToTableTop('detail-pagination');
             loadDetailData(1);
         }
 
