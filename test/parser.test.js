@@ -630,3 +630,30 @@ test('23. 独立新增测试：DuckDB 存储和查询 line_number 与 source_fil
     assert.strictEqual(emptyResult.total, 0);
     assert.strictEqual(emptyResult.rows.length, 0);
 });
+
+test('24. 独立新增测试：校验 server.js 渲染出的前端 HTML 页面中内嵌 JavaScript 语法绝对正确', () => {
+    const vm = require('vm');
+    const { createServer } = require('../server');
+    
+    // 从 server.js 中获取渲染的 HTML 内容
+    const serverFileContent = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf-8');
+    const fnStart = serverFileContent.indexOf('function getDashboardHtml()');
+    const fnEnd = serverFileContent.indexOf('module.exports');
+    const fnCode = serverFileContent.slice(fnStart, fnEnd);
+    
+    // 动态评估 getDashboardHtml 函数
+    const getDashboardHtml = new Function(fnCode + '\nreturn getDashboardHtml();');
+    const html = getDashboardHtml();
+
+    assert.ok(html && html.includes('<script>'), 'HTML 应包含 script 标签');
+
+    const scriptStart = html.indexOf('<script>') + 8;
+    const scriptEnd = html.indexOf('</script>');
+    const jsCode = html.slice(scriptStart, scriptEnd);
+
+    // 断言 vm.Script 解析前端生成的脚本不抛出 SyntaxError
+    assert.doesNotThrow(() => {
+        new vm.Script(jsCode);
+    }, '前端生成的 JS 代码不应包含任何语法错误');
+});
+

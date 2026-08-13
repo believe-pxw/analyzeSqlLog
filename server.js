@@ -1285,7 +1285,7 @@ function getDashboardHtml() {
         function buildVscodeLink(sourceFile, lineNumber) {
             if (!sourceFile || !lineNumber) return '<span style="color:#999;">-</span>';
 
-            const fileName = sourceFile.split('/').pop().split('\\').pop();
+            const fileName = sourceFile.split('/').pop().split('\\\\').pop();
 
             if (sourceFile.endsWith('.gz')) {
                 return \`<button class="btn-vscode" onclick="openGzInVscode('\${escapeJs(sourceFile)}', \${lineNumber})" title="\${escapeHtml(sourceFile)}:L\${lineNumber}">
@@ -1293,7 +1293,7 @@ function getDashboardHtml() {
                 </button>\`;
             }
 
-            const vscodeUri = 'vscode://file/' + sourceFile.replace(/\\/g, '/') + ':' + lineNumber;
+            const vscodeUri = 'vscode://file/' + sourceFile.replace(/\\\\/g, '/') + ':' + lineNumber;
             return \`<a href="\${vscodeUri}" class="btn-vscode" title="\${escapeHtml(sourceFile)}:L\${lineNumber}">
                 📎 \${fileName}:L\${lineNumber}
             </a>\`;
