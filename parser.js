@@ -165,7 +165,9 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
                     db_manager: '',
                     sql_template: '',
                     sql_params: '',
-                    full_sql: ''
+                    full_sql: '',
+                    line_number: totalLines,
+                    source_file: path.resolve(filePath)
                 };
             }
             continue;
@@ -184,7 +186,9 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
                     db_manager: '',
                     sql_template: '',
                     sql_params: '',
-                    full_sql: ''
+                    full_sql: '',
+                    line_number: totalLines,
+                    source_file: path.resolve(filePath)
                 };
             } else {
                 continue;

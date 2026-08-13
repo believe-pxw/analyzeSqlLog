@@ -507,3 +507,126 @@ test('21. 独立新增测试：getDiagnostics 自动过滤 UPDATE 语句断言�
 
 
 
+test('22. 独立新增测试：parseLogFile 解析记录包含正确的 line_number 和 source_file 字段', async () => {
+    const fixtureFile = path.join(__dirname, 'fixtures', 'sample-server-info.log');
+    if (!fs.existsSync(fixtureFile)) {
+        // 如果 fixture 文件不存在，使用临时文件测试
+        const tmpFile = path.join(__dirname, 'fixtures', '_tmp_linenum_test_server-info.log');
+        const logLines = [
+            '2026-08-12 10:00:01.001 [INFO] [xxx] [xxx] [xxx] [trace-A] [xxx] [xxx] [thread-1] [com.xxx.PreparedStatementWithLog]',
+            '>SQL执行信息: 影响行数:[1 rows] 执行时间:[5ms]',
+            '>dbManager：[TestDB]',
+            '>SQL语句:[SELECT * FROM table_a WHERE id = ?]',
+            '>SQL参数:[123]',
+            '>完整SQL:[SELECT * FROM table_a WHERE id = 123]',
+            '',
+            '2026-08-12 10:00:02.002 [INFO] [xxx] [xxx] [xxx] [trace-B] [xxx] [xxx] [thread-2] [com.xxx.PreparedStatementWithLog]',
+            '>SQL执行信息: 影响行数:[3 rows] 执行时间:[15ms]',
+            '>dbManager：[TestDB2]',
+            '>SQL语句:[SELECT * FROM table_b WHERE name = ?]',
+            '>SQL参数:[test]',
+            '>完整SQL:[SELECT * FROM table_b WHERE name = test]',
+        ];
+        fs.writeFileSync(tmpFile, logLines.join('\n'), 'utf-8');
+
+        const records = [];
+        await parseLogFile(tmpFile, (record) => {
+            records.push(record);
+        });
+
+        // 清理临时文件
+        fs.unlinkSync(tmpFile);
+
+        assert.ok(records.length >= 2, `应至少解析出 2 条记录, 实际: ${records.length}`);
+
+        // 验证 line_number 存在且为正整数
+        for (const r of records) {
+            assert.ok(typeof r.line_number === 'number', 'line_number 应为数字');
+            assert.ok(r.line_number > 0, `line_number 应为正数, 实际: ${r.line_number}`);
+        }
+
+        // 第一条记录应在第1行（Header行），第二条在第8行
+        assert.strictEqual(records[0].line_number, 1, '第一条记录应在第 1 行');
+        assert.strictEqual(records[1].line_number, 8, '第二条记录应在第 8 行');
+
+        // 验证 source_file 是绝对路径
+        for (const r of records) {
+            assert.ok(typeof r.source_file === 'string', 'source_file 应为字符串');
+            assert.ok(path.isAbsolute(r.source_file), `source_file 应为绝对路径, 实际: ${r.source_file}`);
+        }
+    } else {
+        const records = [];
+        await parseLogFile(fixtureFile, (record) => {
+            records.push(record);
+        });
+
+        assert.ok(records.length > 0, '应解析出记录');
+
+        // 验证所有记录都有 line_number 和 source_file
+        for (const r of records) {
+            assert.ok(typeof r.line_number === 'number' && r.line_number > 0, `line_number 应为正整数, 实际: ${r.line_number}`);
+            assert.ok(typeof r.source_file === 'string' && path.isAbsolute(r.source_file), `source_file 应为绝对路径, 实际: ${r.source_file}`);
+        }
+
+        // 验证第一条记录的行号应 >= 1
+        assert.ok(records[0].line_number >= 1, '第一条记录行号应 >= 1');
+
+        // 验证行号递增
+        for (let i = 1; i < records.length; i++) {
+            assert.ok(records[i].line_number > records[i-1].line_number, `第 ${i+1} 条记录行号应大于第 ${i} 条`);
+        }
+    }
+});
+
+test('23. 独立新增测试：DuckDB 存储和查询 line_number 与 source_file 字段断言', async () => {
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    const testRecords = [];
+    for (let i = 1; i <= 5; i++) {
+        testRecords.push({
+            id: i,
+            log_time: `2026-08-12 10:00:0${i}.000`,
+            trace_id: i <= 3 ? 'trace-X' : 'trace-Y',
+            thread_name: 'thread-1',
+            exec_time_ms: i * 10,
+            result_rows: i,
+            db_manager: 'TestDB',
+            sql_template: 'SELECT * FROM test_table WHERE id = ?',
+            sql_params: String(i),
+            full_sql: `SELECT * FROM test_table WHERE id = ${i}`,
+            line_number: i * 100,
+            source_file: 'D:/logs/server-info.log'
+        });
+    }
+
+    await db.insertBatch(testRecords);
+
+    // 验证 getTopSlow 返回 line_number 和 source_file
+    const slowResult = await db.getTopSlow(1, 5);
+    assert.ok(slowResult.rows.length > 0, '应有慢SQL结果');
+    assert.strictEqual(slowResult.rows[0].source_file, 'D:/logs/server-info.log');
+    assert.ok(slowResult.rows[0].line_number > 0, 'line_number 应为正数');
+
+    // 验证 getByTraceId 返回 line_number 和 source_file
+    const traceResult = await db.getByTraceId('trace-X', 1, 10);
+    assert.ok(traceResult.rows.length === 3, '应有3条 trace-X 记录');
+    for (const r of traceResult.rows) {
+        assert.strictEqual(r.source_file, 'D:/logs/server-info.log');
+        assert.ok(r.line_number > 0);
+    }
+
+    // 验证 getByTemplate 查询
+    const templateResult = await db.getByTemplate('SELECT * FROM test_table WHERE id = ?', 1, 10);
+    assert.strictEqual(templateResult.total, 5, '应有5条匹配模板的记录');
+    assert.strictEqual(templateResult.rows.length, 5);
+    for (const r of templateResult.rows) {
+        assert.strictEqual(r.source_file, 'D:/logs/server-info.log');
+        assert.ok(r.line_number > 0);
+    }
+
+    // 验证 getByTemplate 空模板返回空结果
+    const emptyResult = await db.getByTemplate('', 1, 10);
+    assert.strictEqual(emptyResult.total, 0);
+    assert.strictEqual(emptyResult.rows.length, 0);
+});

@@ -1,4 +1,8 @@
 const http = require('http');
+const zlib = require('zlib');
+const fs = require('fs');
+const fsPath = require('path');
+const os = require('os');
 
 function safeJsonStringify(obj) {
     return JSON.stringify(obj, (key, value) =>
@@ -111,6 +115,59 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const rows = await dbInstance.getDiagnostics(traceId);
                     const processedRows = attachBriefSql(rows, 'sql_template');
                     return res.end(safeJsonStringify({ success: true, data: processedRows }));
+                }
+
+                if (pathname === '/api/by-template' && method === 'GET') {
+                    const sqlTemplate = query.sqlTemplate || '';
+                    const page = parseInt(query.page, 10) || 1;
+                    const pageSize = parseInt(query.pageSize, 10) || 50;
+
+                    const result = await dbInstance.getByTemplate(sqlTemplate, page, pageSize);
+                    const processedRows = attachBriefSql(result.rows, 'full_sql');
+                    return res.end(safeJsonStringify({
+                        success: true, data: processedRows,
+                        total: result.total, page: result.page, pageSize: result.pageSize
+                    }));
+                }
+
+                if (pathname === '/api/decompress-gz' && method === 'GET') {
+                    const gzFilePath = query.filePath || '';
+                    if (!gzFilePath || !gzFilePath.endsWith('.gz')) {
+                        res.writeHead(400);
+                        return res.end(safeJsonStringify({ success: false, error: '无效的 .gz 文件路径' }));
+                    }
+
+                    const decompressDir = fsPath.join(os.tmpdir(), 'sqllog_decompressed');
+                    if (!fs.existsSync(decompressDir)) {
+                        fs.mkdirSync(decompressDir, { recursive: true });
+                    }
+
+                    const baseName = fsPath.basename(gzFilePath).replace(/\.gz$/i, '');
+                    const decompressedPath = fsPath.join(decompressDir, baseName);
+
+                    // 如果已解压过则直接返回
+                    if (fs.existsSync(decompressedPath)) {
+                        return res.end(safeJsonStringify({ success: true, decompressedPath: decompressedPath.replace(/\\/g, '/') }));
+                    }
+
+                    try {
+                        const input = fs.createReadStream(gzFilePath);
+                        const gunzip = zlib.createGunzip();
+                        const output = fs.createWriteStream(decompressedPath);
+
+                        await new Promise((resolve, reject) => {
+                            input.pipe(gunzip).pipe(output);
+                            output.on('finish', resolve);
+                            output.on('error', reject);
+                            gunzip.on('error', reject);
+                            input.on('error', reject);
+                        });
+
+                        return res.end(safeJsonStringify({ success: true, decompressedPath: decompressedPath.replace(/\\/g, '/') }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        return res.end(safeJsonStringify({ success: false, error: '解压失败: ' + e.message }));
+                    }
                 }
 
                 res.writeHead(404);
@@ -452,6 +509,53 @@ function getDashboardHtml() {
             opacity: 1;
             transform: translateX(-50%) translateY(4px);
         }
+
+        .btn-vscode {
+            display: inline-block;
+            background: #22c55e;
+            color: #ffffff;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 11px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.15s;
+            white-space: nowrap;
+        }
+        .btn-vscode:hover { background: #16a34a; color: #ffffff; }
+
+        .btn-view-calls {
+            background: #8b5cf6;
+            color: #ffffff;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+        }
+        .btn-view-calls:hover { background: #7c3aed; }
+
+        .detail-header {
+            margin-bottom: 12px;
+            padding: 10px 14px;
+            background: rgba(139, 92, 246, 0.08);
+            border-left: 4px solid #8b5cf6;
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text);
+        }
+        .detail-header code {
+            background: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #475569;
+        }
     </style>
 </head>
 <body>
@@ -477,6 +581,7 @@ function getDashboardHtml() {
             <button class="tab-btn" data-tab="slow" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
             <button class="tab-btn" data-tab="trace" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
             <button class="tab-btn" data-tab="repeated" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
+            <button class="tab-btn" data-tab="detail" onclick="switchTab('detail')">📋 SQL 调用明细</button>
             <button class="tab-btn" data-tab="overview" onclick="switchTab('overview')">📈 概览统计分析</button>
         </div>
 
@@ -526,10 +631,11 @@ function getDashboardHtml() {
                             <th style="width: 180px;">TraceID</th>
                             <th style="width: 150px;">时间</th>
                             <th style="width: 80px;">影响行数</th>
+                            <th style="width: 130px;">日志定位</th>
                             <th>完整执行 SQL (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
                     </thead>
-                    <tbody id="slow-tbody"><tr><td colspan="6" style="text-align: center;">加载中...</td></tr></tbody>
+                    <tbody id="slow-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
                 <div class="pagination-bar" id="slow-pagination"></div>
             </div>
@@ -555,10 +661,11 @@ function getDashboardHtml() {
                             <th style="width: 160px;">时间</th>
                             <th style="width: 110px;">耗时 (ms)</th>
                             <th style="width: 80px;">影响行数</th>
+                            <th style="width: 130px;">日志定位</th>
                             <th>执行 SQL 语句 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
                         </tr>
                     </thead>
-                    <tbody id="trace-tbody"><tr><td colspan="5" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
+                    <tbody id="trace-tbody"><tr><td colspan="6" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
                 </table>
             </div>
             <div class="pagination-bar" id="trace-pagination-bar" style="display: none; margin-top: 12px;">
@@ -601,15 +708,40 @@ function getDashboardHtml() {
                             <th style="width: 90px;">最大耗时</th>
                             <th style="width: 80px;">Trace 数</th>
                             <th>SQL 参数化模板 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
+                            <th style="width: 80px;">操作</th>
                         </tr>
                     </thead>
-                    <tbody id="repeated-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
+                    <tbody id="repeated-tbody"><tr><td colspan="8" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
                 <div class="pagination-bar" id="repeated-pagination"></div>
             </div>
         </div>
 
-        <!-- 5. 独立概览统计 Tab Panel (倒数第一) -->
+        <!-- 5. SQL 调用明细 Panel -->
+        <div id="panel-detail" class="panel">
+            <div class="detail-header" id="detail-header">
+                💡 从 <b>频次榜</b> 点击「查看调用」跳转到此面板，查看某条 SQL 模板的所有调用明细。
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">#</th>
+                            <th style="width: 160px;">时间</th>
+                            <th style="width: 130px;">TraceID</th>
+                            <th style="width: 90px;">耗时 (ms)</th>
+                            <th style="width: 70px;">影响行数</th>
+                            <th style="width: 130px;">日志定位</th>
+                            <th>执行 SQL (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detail-tbody"><tr><td colspan="7" style="text-align: center; color: var(--text-muted);">请从频次榜点击「查看调用」按钮</td></tr></tbody>
+                </table>
+                <div class="pagination-bar" id="detail-pagination"></div>
+            </div>
+        </div>
+
+        <!-- 6. 独立概览统计 Tab Panel (最后) -->
         <div id="panel-overview" class="panel">
             <div class="stats-grid">
                 <div class="stat-card"><span class="label">分析 SQL 总数</span><span class="value" id="stat-total-sqls">-</span></div>
@@ -777,7 +909,7 @@ function getDashboardHtml() {
         function renderRepeatedTable(data) {
             const tbody = document.getElementById('repeated-tbody');
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">未找到符合条件的 SQL</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center;">未找到符合条件的 SQL</td></tr>';
                 return;
             }
             const offset = (curRepeatedPage - 1) * curRepeatedPageSize;
@@ -795,6 +927,9 @@ function getDashboardHtml() {
                     <td>\${r.trace_count}</td>
                     <td>
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                    </td>
+                    <td>
+                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}')">🔍 查看调用</button>
                     </td>
                 </tr>
             \`;
@@ -828,7 +963,7 @@ function getDashboardHtml() {
         function renderSlowTable(data) {
             const tbody = document.getElementById('slow-tbody');
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">未找到符合条件的慢 SQL</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">未找到符合条件的慢 SQL</td></tr>';
                 return;
             }
             const offset = (curSlowPage - 1) * curSlowPageSize;
@@ -843,6 +978,7 @@ function getDashboardHtml() {
                     <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
                     <td>\${r.log_time}</td>
                     <td>\${r.result_rows}</td>
+                    <td>\${buildVscodeLink(r.source_file, r.line_number)}</td>
                     <td>
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
@@ -976,7 +1112,7 @@ function getDashboardHtml() {
             const traceId = document.getElementById('trace-input').value.trim();
 
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">未查找到符合条件的 SQL 记录</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">未查找到符合条件的 SQL 记录</td></tr>';
                 summary.innerText = '';
                 updateTracePaginationUI();
                 return;
@@ -997,6 +1133,7 @@ function getDashboardHtml() {
                     <td>\${r.log_time}</td>
                     <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
                     <td>\${r.result_rows}</td>
+                    <td>\${buildVscodeLink(r.source_file, r.line_number)}</td>
                     <td>
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
@@ -1072,6 +1209,104 @@ function getDashboardHtml() {
         function escapeJs(str) {
             if (!str) return '';
             return JSON.stringify(str).slice(1, -1);
+        }
+
+        // ==================== SQL 调用明细 (Detail) 功能 ====================
+        let currentDetailTemplate = '';
+        let curDetailPage = 1;
+        let curDetailPageSize = 50;
+        let totalDetailCount = 0;
+
+        function jumpToDetail(sqlTemplate) {
+            currentDetailTemplate = sqlTemplate;
+            switchTab('detail');
+            loadDetailData(1);
+        }
+
+        async function loadDetailData(page = 1) {
+            if (!currentDetailTemplate) return;
+            curDetailPage = page;
+
+            const res = await fetch(\`/api/by-template?sqlTemplate=\${encodeURIComponent(currentDetailTemplate)}&page=\${curDetailPage}&pageSize=\${curDetailPageSize}\`);
+            const json = await res.json();
+            if (json.success) {
+                totalDetailCount = json.total;
+                renderDetailTable(json.data);
+                renderPagination('detail-pagination', curDetailPage, curDetailPageSize, totalDetailCount, (p, ps) => {
+                    curDetailPageSize = ps;
+                    loadDetailData(p);
+                });
+
+                // 更新头部摘要
+                const header = document.getElementById('detail-header');
+                const briefTemplate = compressSqlColumnsFrontend(currentDetailTemplate);
+                header.innerHTML = \`📊 当前查看 SQL 模板的所有调用明细，共 <b>\${totalDetailCount.toLocaleString()}</b> 次调用<br><code>\${escapeHtml(briefTemplate)}</code>\`;
+            }
+        }
+
+        function compressSqlColumnsFrontend(sql) {
+            if (!sql) return '';
+            const str = sql.trim();
+            const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
+            if (match && (match[2].includes(',') || match[2].trim().length > 15)) {
+                return match[1] + '... ' + match[3].trim();
+            }
+            return str.length > 200 ? str.substring(0, 200) + '...' : str;
+        }
+
+        function renderDetailTable(data) {
+            const tbody = document.getElementById('detail-tbody');
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">未找到调用记录</td></tr>';
+                return;
+            }
+            const offset = (curDetailPage - 1) * curDetailPageSize;
+            tbody.innerHTML = data.map((r, i) => {
+                const fullSql = r.full_sql || r.sql_template || '';
+                const briefSql = r.brief_sql || fullSql;
+
+                return \`
+                <tr>
+                    <td>\${offset + i + 1}</td>
+                    <td>\${r.log_time}</td>
+                    <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
+                    <td><span class="\${r.exec_time_ms > 50 ? 'tag-slow' : ''}">\${r.exec_time_ms} ms</span></td>
+                    <td>\${r.result_rows}</td>
+                    <td>\${buildVscodeLink(r.source_file, r.line_number)}</td>
+                    <td>
+                        <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                    </td>
+                </tr>
+            \`;
+            }).join('');
+        }
+
+        // ==================== VSCode 跳转功能 ====================
+        function buildVscodeLink(sourceFile, lineNumber) {
+            if (!sourceFile || !lineNumber) return '<span style="color:#999;">-</span>';
+
+            const fileName = sourceFile.split('/').pop().split('\\').pop();
+
+            if (sourceFile.endsWith('.gz')) {
+                return \`<button class="btn-vscode" onclick="openGzInVscode('\${escapeJs(sourceFile)}', \${lineNumber})" title="\${escapeHtml(sourceFile)}:L\${lineNumber}">
+                    📂 \${fileName}:L\${lineNumber}
+                </button>\`;
+            }
+
+            const vscodeUri = 'vscode://file/' + sourceFile.replace(/\\/g, '/') + ':' + lineNumber;
+            return \`<a href="\${vscodeUri}" class="btn-vscode" title="\${escapeHtml(sourceFile)}:L\${lineNumber}">
+                📎 \${fileName}:L\${lineNumber}
+            </a>\`;
+        }
+
+        async function openGzInVscode(gzPath, lineNumber) {
+            const res = await fetch('/api/decompress-gz?filePath=' + encodeURIComponent(gzPath));
+            const json = await res.json();
+            if (json.success) {
+                window.open('vscode://file/' + json.decompressedPath + ':' + lineNumber, '_self');
+            } else {
+                alert('解压失败: ' + (json.error || '未知错误'));
+            }
         }
 
         window.onload = init;

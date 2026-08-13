@@ -38,7 +38,9 @@ class SqlLogDatabase {
                 db_manager VARCHAR,
                 sql_template VARCHAR,
                 sql_params VARCHAR,
-                full_sql VARCHAR
+                full_sql VARCHAR,
+                line_number INT,
+                source_file VARCHAR
             );
             CREATE INDEX IF NOT EXISTS idx_trace_id ON sqllogs(trace_id);
             CREATE INDEX IF NOT EXISTS idx_exec_time ON sqllogs(exec_time_ms DESC);
@@ -92,18 +94,22 @@ class SqlLogDatabase {
                 db_manager: r.db_manager || '',
                 sql_template: r.sql_template || '',
                 sql_params: r.sql_params || '',
-                full_sql: r.full_sql || ''
+                full_sql: r.full_sql || '',
+                line_number: r.line_number || 0,
+                source_file: r.source_file || ''
             }));
             fs.writeFileSync(tmpPath, JSON.stringify(normalized));
 
             await this.query(`
                 INSERT INTO sqllogs (
                     id, log_time, trace_id, thread_name, exec_time_ms,
-                    result_rows, db_manager, sql_template, sql_params, full_sql
+                    result_rows, db_manager, sql_template, sql_params, full_sql,
+                    line_number, source_file
                 )
                 SELECT 
                     id, log_time, trace_id, thread_name, exec_time_ms,
-                    result_rows, db_manager, sql_template, sql_params, full_sql
+                    result_rows, db_manager, sql_template, sql_params, full_sql,
+                    line_number, source_file
                 FROM read_json_auto('${tmpPath.replace(/\\/g, '/')}')
             `);
         } finally {
@@ -192,7 +198,7 @@ class SqlLogDatabase {
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
-            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
+            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql, line_number, source_file
             FROM sqllogs
             ${whereClause}
             ORDER BY exec_time_ms DESC
@@ -213,7 +219,7 @@ class SqlLogDatabase {
 
         if (page === null) {
             const sql = `
-                SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
+                SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql, line_number, source_file
                 FROM sqllogs
                 ${whereClause}
                 ORDER BY id ASC
@@ -227,7 +233,34 @@ class SqlLogDatabase {
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
-            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql
+            SELECT id, log_time, trace_id, thread_name, exec_time_ms, result_rows, db_manager, sql_template, full_sql, line_number, source_file
+            FROM sqllogs
+            ${whereClause}
+            ORDER BY id ASC
+            LIMIT ? OFFSET ?
+        `;
+        const rows = await this.query(dataSql, [...params, pageSize, offset]);
+        return { rows, total, page, pageSize };
+    }
+
+    /**
+     * 📋 按 SQL 模板精确查询所有调用明细 (支持分页)
+     */
+    async getByTemplate(sqlTemplate, page = 1, pageSize = 50) {
+        if (!sqlTemplate) return { rows: [], total: 0, page: 1, pageSize };
+
+        const whereClause = 'WHERE sql_template = ?';
+        const params = [sqlTemplate];
+
+        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
+        const countRows = await this.query(countSql, params);
+        const total = countRows[0] ? Number(countRows[0].total) : 0;
+
+        const offset = (page - 1) * pageSize;
+        const dataSql = `
+            SELECT id, log_time, trace_id, thread_name, exec_time_ms,
+                   result_rows, db_manager, sql_template, full_sql,
+                   line_number, source_file
             FROM sqllogs
             ${whereClause}
             ORDER BY id ASC
