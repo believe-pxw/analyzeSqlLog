@@ -253,6 +253,7 @@ function getDashboardHtml() {
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { overflow-y: scroll; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
             background-color: var(--bg);
@@ -1173,7 +1174,6 @@ function getDashboardHtml() {
             const input = document.getElementById('trace-input');
             if (input) input.value = traceId;
             switchTab('trace', true);
-            scrollToTableTop('trace-pagination');
             loadTraceData(1);
         }
 
@@ -1262,7 +1262,6 @@ function getDashboardHtml() {
             currentDetailTemplate = sqlTemplate;
             currentDetailContext = contextInfo;
             switchTab('detail', true);
-            scrollToTableTop('detail-pagination');
             loadDetailData(1);
         }
 
