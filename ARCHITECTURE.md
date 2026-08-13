@@ -188,7 +188,7 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 | GET | `/api/top-repeated` | `page, pageSize, traceId, excludeBackground` | SQL 频次榜 |
 | GET | `/api/top-slow` | `page, pageSize, traceId, excludeBackground` | 慢 SQL 排行 |
 | GET | `/api/trace` | `traceId, page, pageSize` | Trace 链路查询 |
-| GET | `/api/diagnostics` | `traceId` | N+1 循环诊断 |
+| GET | `/api/diagnostics` | `traceId, page, pageSize` | 事务内重复 SQL (N+1) 循环诊断 |
 | GET | `/api/by-template` | `sqlTemplate, page, pageSize` | 按 SQL 模板查所有调用 |
 | GET | `/api/decompress-gz` | `filePath` | 解压 .gz 到临时目录 |
 
