@@ -222,9 +222,10 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 
 ### 5. test/parser.test.js — 测试
 
-- **共 23 个测试用例**，编号 `1` ~ `23`
+- **共 25 个测试用例**，编号 `1` ~ `25`
 - 前 3 个为性能基准测试（10万条插入、聚合查询、50万行解析）
-- 覆盖范围：解析器、数据库 CRUD、HTTP 路由、.gz 解压、Worker Threads、分页、排序、N+1 诊断、行号/source_file
+- 测试 24：自动化校验 `server.js` 渲染的前端 HTML/JS 绝对零语法错误
+- **测试 25：基于 `test/fixtures` 真实日志构建的 Web 页面与 API 端到端集成测试，严格断言每个页面（频次榜、慢SQL、明细、Trace链路等）100% 均有真实数据输出**
 - 运行命令：`npm test`
 
 ---
