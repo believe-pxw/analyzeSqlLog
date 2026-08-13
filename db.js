@@ -138,19 +138,15 @@ class SqlLogDatabase {
     }
 
     /**
-     * 📊 Top 频次 SQL 榜 (支持后端分页、TraceID过滤、后台锁排除)
+     * 📊 Top 频次 SQL 榜 (支持后端分页、TraceID过滤)
      */
-    async getTopRepeated(page = 1, pageSize = 20, traceId = '', excludeBackground = false) {
+    async getTopRepeated(page = 1, pageSize = 20, traceId = '') {
         let whereClause = 'WHERE 1=1';
         const params = [];
 
         if (traceId) {
             whereClause += ' AND trace_id = ?';
             params.push(traceId);
-        }
-
-        if (excludeBackground) {
-            whereClause += " AND sql_template NOT LIKE '%SYS_Lock%' AND sql_template NOT LIKE '%BK_ScheduledTask%'";
         }
 
         const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs ${whereClause}`;
@@ -177,9 +173,9 @@ class SqlLogDatabase {
     }
 
     /**
-     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、后台锁排除)
+     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、最小耗时阈值过滤)
      */
-    async getTopSlow(page = 1, pageSize = 20, traceId = '', excludeBackground = false) {
+    async getTopSlow(page = 1, pageSize = 20, traceId = '', minCostMs = 0) {
         let whereClause = 'WHERE 1=1';
         const params = [];
 
@@ -188,8 +184,9 @@ class SqlLogDatabase {
             params.push(traceId);
         }
 
-        if (excludeBackground) {
-            whereClause += " AND sql_template NOT LIKE '%SYS_Lock%' AND sql_template NOT LIKE '%BK_ScheduledTask%'";
+        if (minCostMs > 0) {
+            whereClause += ' AND exec_time_ms >= ?';
+            params.push(minCostMs);
         }
 
         const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
@@ -273,7 +270,7 @@ class SqlLogDatabase {
     /**
      * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID (支持 TraceID 过滤)，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
      */
-    async getDiagnostics(traceId = '', page = 1, pageSize = 20) {
+    async getDiagnostics(traceId = '', page = 1, pageSize = 20, minRepeatCount = 5) {
         let whereClause = "WHERE trace_id != '-' AND db_manager != '' AND LOWER(LTRIM(sql_template)) NOT LIKE 'update%'";
         const params = [];
 
@@ -284,10 +281,10 @@ class SqlLogDatabase {
 
         const countSql = `
             SELECT COUNT(*) as cnt FROM (
-                SELECT 1 FROM sqllogs ${whereClause} GROUP BY trace_id, db_manager, sql_template HAVING COUNT(*) >= 5
+                SELECT 1 FROM sqllogs ${whereClause} GROUP BY trace_id, db_manager, sql_template HAVING COUNT(*) >= ?
             )
         `;
-        const countRes = await this.query(countSql, params);
+        const countRes = await this.query(countSql, [...params, minRepeatCount]);
         const total = countRes[0] ? Number(countRes[0].cnt) : 0;
 
         const offset = (page - 1) * pageSize;
@@ -301,11 +298,11 @@ class SqlLogDatabase {
             FROM sqllogs
             ${whereClause}
             GROUP BY trace_id, db_manager, sql_template
-            HAVING COUNT(*) >= 5
+            HAVING COUNT(*) >= ?
             ORDER BY repeat_count DESC, total_time_ms DESC
             LIMIT ? OFFSET ?
         `;
-        const rows = await this.query(sql, [...params, pageSize, offset]);
+        const rows = await this.query(sql, [...params, minRepeatCount, pageSize, offset]);
         return { rows, total, page, pageSize };
     }
 

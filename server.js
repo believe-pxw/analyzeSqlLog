@@ -70,9 +70,8 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
                     const traceId = query.traceId || '';
-                    const excludeBg = query.excludeBackground === 'true';
                     
-                    const result = await dbInstance.getTopRepeated(page, pageSize, traceId, excludeBg);
+                    const result = await dbInstance.getTopRepeated(page, pageSize, traceId);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
                     return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
@@ -81,9 +80,9 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
                     const traceId = query.traceId || '';
-                    const excludeBg = query.excludeBackground === 'true';
+                    const minCostMs = parseInt(query.minCostMs, 10) || 0;
 
-                    const result = await dbInstance.getTopSlow(page, pageSize, traceId, excludeBg);
+                    const result = await dbInstance.getTopSlow(page, pageSize, traceId, minCostMs);
                     const processedRows = attachBriefSql(result.rows, 'full_sql');
                     return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
@@ -114,8 +113,9 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const traceId = query.traceId || '';
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
+                    const minRepeatCount = parseInt(query.minRepeatCount, 10) || 5;
 
-                    const result = await dbInstance.getDiagnostics(traceId, page, pageSize);
+                    const result = await dbInstance.getDiagnostics(traceId, page, pageSize, minRepeatCount);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
                     return res.end(safeJsonStringify({
                         success: true,
@@ -602,8 +602,13 @@ function getDashboardHtml() {
                 <strong>💡 事务粒度 N+1 冗余诊断说明：</strong> 基于日志中 <code>dbManager</code> 内存对象句柄（如 <code>MySqlDBManager@7b2aa7e0</code>），抓取在【同一数据库事务内】重复执行 5 次及以上的 SQL 模板。
             </div>
             <div class="toolbar">
-                <input type="text" id="trace-diagnose" class="search-input" style="max-width: 260px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics()">
+                <input type="text" id="trace-diagnose" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics(1)">
                 <input type="text" id="search-diagnose" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 EMM_...）" oninput="filterDiagnoseTable()">
+                <div style="display: flex; align-items: center; gap: 6px; background: #ffffff; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px;">
+                    <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">重复次数 &gt;=</span>
+                    <input type="number" id="inp-min-repeat" class="search-input" style="width: 80px; padding: 3px 6px; border: none;" value="5" min="1" placeholder="5" onchange="loadDiagnostics(1)" oninput="loadDiagnostics(1)">
+                    <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">次</span>
+                </div>
             </div>
             <div class="table-container">
                 <table>
@@ -628,12 +633,13 @@ function getDashboardHtml() {
         <!-- 2. 慢 SQL Panel -->
         <div id="panel-slow" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-slow" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
+                <input type="text" id="trace-slow" class="search-input" style="max-width: 220px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
                 <input type="text" id="search-slow" class="search-input" placeholder="搜索慢 SQL 语句..." oninput="filterSlowTable()">
-                <label class="filter-checkbox">
-                    <input type="checkbox" id="chk-slow-bg" onchange="loadSlow(1)">
-                    🚫 排除后台锁/定时任务
-                </label>
+                <div style="display: flex; align-items: center; gap: 6px; background: #ffffff; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px;">
+                    <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">执行耗时 &gt;=</span>
+                    <input type="number" id="inp-min-cost" class="search-input" style="width: 90px; padding: 3px 6px; border: none;" value="0" min="0" placeholder="0" onchange="loadSlow(1)" oninput="loadSlow(1)">
+                    <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">ms</span>
+                </div>
             </div>
             <div class="table-container">
                 <table>
@@ -689,10 +695,6 @@ function getDashboardHtml() {
             <div class="toolbar">
                 <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
                 <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
-                <label class="filter-checkbox">
-                    <input type="checkbox" id="chk-repeated-bg" onchange="loadRepeated(1)">
-                    🚫 排除后台锁/定时任务
-                </label>
             </div>
             <div class="table-container">
                 <table>
@@ -717,7 +719,7 @@ function getDashboardHtml() {
         <!-- 5. SQL 调用明细 Panel -->
         <div id="panel-detail" class="panel">
             <div class="detail-header" id="detail-header">
-                💡 从 <b>频次榜</b> 点击「查看调用」跳转到此面板，查看某条 SQL 模板的所有调用明细。
+                💡 从 <b>📊 SQL 频次榜</b> 或 <b>🔁 事务内重复 SQL (N+1) 诊断</b> 点击「🔍 查看调用」跳转到此面板，查看某条 SQL 模板的所有调用明细。
             </div>
             <div class="table-container">
                 <table>
@@ -905,11 +907,9 @@ function getDashboardHtml() {
             curRepeatedPage = page;
             const traceEl = document.getElementById('trace-repeated');
             const traceId = traceEl ? traceEl.value.trim() : '';
-            const bgEl = document.getElementById('chk-repeated-bg');
-            const excludeBg = bgEl ? bgEl.checked : false;
 
             try {
-                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawRepeatedData = json.data;
@@ -968,11 +968,11 @@ function getDashboardHtml() {
             curSlowPage = page;
             const traceEl = document.getElementById('trace-slow');
             const traceId = traceEl ? traceEl.value.trim() : '';
-            const bgEl = document.getElementById('chk-slow-bg');
-            const excludeBg = bgEl ? bgEl.checked : false;
+            const costEl = document.getElementById('inp-min-cost');
+            const minCost = costEl ? (parseInt(costEl.value, 10) || 0) : 0;
 
             try {
-                const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+                const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&minCostMs=\${minCost}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawSlowData = json.data;
@@ -1179,18 +1179,26 @@ function getDashboardHtml() {
 
         async function loadDiagnostics(page = 1) {
             curDiagnosePage = page;
-            const traceId = document.getElementById('trace-diagnose').value.trim();
+            const traceEl = document.getElementById('trace-diagnose');
+            const traceId = traceEl ? traceEl.value.trim() : '';
+            const repeatEl = document.getElementById('sel-min-repeat');
+            const minRepeat = repeatEl ? repeatEl.value : '5';
 
-            const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}\`);
-            const json = await res.json();
-            if (json.success) {
-                rawDiagnoseData = json.data;
-                totalDiagnoseCount = json.total || 0;
-                renderDiagnoseTable(rawDiagnoseData);
-                renderPagination('diagnose-pagination', curDiagnosePage, curDiagnosePageSize, totalDiagnoseCount, (p, ps) => {
-                    curDiagnosePageSize = ps;
-                    loadDiagnostics(p);
-                });
+            try {
+                const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}&minRepeatCount=\${minRepeat}\`);
+                const json = await res.json();
+                if (json.success) {
+                    rawDiagnoseData = json.data;
+                    totalDiagnoseCount = json.total || 0;
+                    renderDiagnoseTable(rawDiagnoseData);
+                    renderPagination('diagnose-pagination', curDiagnosePage, curDiagnosePageSize, totalDiagnoseCount, (p, ps) => {
+                        curDiagnosePageSize = ps;
+                        loadDiagnostics(p);
+                    });
+                }
+            } catch(e) {
+                const tbody = document.getElementById('diagnose-tbody');
+                if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-red);">⚠️ 网络通信错误，无法连接后端服务 (' + escapeHtml(e.message) + ')</td></tr>';
             }
         }
 
