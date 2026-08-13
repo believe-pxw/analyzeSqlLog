@@ -500,9 +500,10 @@ test('21. 独立新增测试：getDiagnostics 自动过滤 UPDATE 语句断言�
     await db.insertBatch(testRecords);
 
     const diagResult = await db.getDiagnostics('t-diag-test');
-    assert.strictEqual(diagResult.length, 1);
-    assert.strictEqual(diagResult[0].sql_template, 'SELECT * FROM user_table WHERE id = ?');
-    assert.strictEqual(Number(diagResult[0].repeat_count), 6);
+    assert.strictEqual(diagResult.total, 1);
+    assert.strictEqual(diagResult.rows.length, 1);
+    assert.strictEqual(diagResult.rows[0].sql_template, 'SELECT * FROM user_table WHERE id = ?');
+    assert.strictEqual(Number(diagResult.rows[0].repeat_count), 6);
 });
 
 

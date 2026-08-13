@@ -112,9 +112,18 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
                 if (pathname === '/api/diagnostics' && method === 'GET') {
                     const traceId = query.traceId || '';
-                    const rows = await dbInstance.getDiagnostics(traceId);
-                    const processedRows = attachBriefSql(rows, 'sql_template');
-                    return res.end(safeJsonStringify({ success: true, data: processedRows }));
+                    const page = parseInt(query.page, 10) || 1;
+                    const pageSize = parseInt(query.pageSize, 10) || 20;
+
+                    const result = await dbInstance.getDiagnostics(traceId, page, pageSize);
+                    const processedRows = attachBriefSql(result.rows, 'sql_template');
+                    return res.end(safeJsonStringify({
+                        success: true,
+                        data: processedRows,
+                        total: result.total,
+                        page: result.page,
+                        pageSize: result.pageSize
+                    }));
                 }
 
                 if (pathname === '/api/by-template' && method === 'GET') {
@@ -610,6 +619,7 @@ function getDashboardHtml() {
                     </thead>
                     <tbody id="diagnose-tbody"><tr><td colspan="8" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
+                <div class="pagination-bar" id="diagnose-pagination"></div>
             </div>
         </div>
 
@@ -751,6 +761,10 @@ function getDashboardHtml() {
         let curSlowPage = 1;
         let curSlowPageSize = 20;
         let totalSlowCount = 0;
+
+        let curDiagnosePage = 1;
+        let curDiagnosePageSize = 20;
+        let totalDiagnoseCount = 0;
 
         let currentRightClickedDiv = null;
 
@@ -1034,6 +1048,7 @@ function getDashboardHtml() {
             if (containerId === 'slow-pagination') return curSlowPageSize;
             if (containerId === 'trace-pagination') return curTracePageSize;
             if (containerId === 'detail-pagination') return curDetailPageSize;
+            if (containerId === 'diagnose-pagination') return curDiagnosePageSize;
             return 20;
         }
 
@@ -1135,13 +1150,20 @@ function getDashboardHtml() {
             loadTraceData(1);
         }
 
-        async function loadDiagnostics() {
+        async function loadDiagnostics(page = 1) {
+            curDiagnosePage = page;
             const traceId = document.getElementById('trace-diagnose').value.trim();
-            const res = await fetch('/api/diagnostics?traceId=' + encodeURIComponent(traceId));
+
+            const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}\`);
             const json = await res.json();
             if (json.success) {
                 rawDiagnoseData = json.data;
+                totalDiagnoseCount = json.total || 0;
                 renderDiagnoseTable(rawDiagnoseData);
+                renderPagination('diagnose-pagination', curDiagnosePage, curDiagnosePageSize, totalDiagnoseCount, (p, ps) => {
+                    curDiagnosePageSize = ps;
+                    loadDiagnostics(p);
+                });
             }
         }
 
@@ -1151,6 +1173,7 @@ function getDashboardHtml() {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
                 return;
             }
+            const offset = (curDiagnosePage - 1) * curDiagnosePageSize;
             tbody.innerHTML = data.map((r, i) => {
                 const isSevere = r.repeat_count >= 20;
                 const tagClass = isSevere ? 'tag-slow' : 'tag-freq';
@@ -1163,7 +1186,7 @@ function getDashboardHtml() {
 
                 return \`
                 <tr>
-                    <td>\${i + 1}</td>
+                    <td>\${offset + i + 1}</td>
                     <td><a class="trace-link" onclick="jumpToTrace('\${r.trace_id}')">\${r.trace_id}</a></td>
                     <td><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-weight: 600; color: #475569;">\${escapeHtml(dbManagerStr)}</code></td>
                     <td><span class="\${tagClass}">\${tagText}</span></td>
