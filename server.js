@@ -809,6 +809,11 @@ function getDashboardHtml() {
             
             const targetPanel = document.getElementById('panel-' + name);
             if (targetPanel) targetPanel.classList.add('active');
+
+            if (name === 'repeated') loadRepeated(curRepeatedPage);
+            if (name === 'slow') loadSlow(curSlowPage);
+            if (name === 'diagnose') loadDiagnostics(curDiagnosePage);
+            if (name === 'detail' && currentDetailTemplate) loadDetailData(curDetailPage);
         }
 
         /**
@@ -1065,7 +1070,7 @@ function getDashboardHtml() {
         }
 
         let curTracePage = 1;
-        let curTracePageSize = 200;
+        let curTracePageSize = 50;
         let totalTraceCount = 0;
 
         async function loadTraceData(page = 1) {
