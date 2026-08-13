@@ -667,25 +667,8 @@ function getDashboardHtml() {
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="6" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
-                </table>
             </div>
-            <div class="pagination-bar" id="trace-pagination-bar" style="display: none; margin-top: 12px;">
-                <div>
-                    <span>每页显示：</span>
-                    <select id="trace-pagesize" onchange="changeTracePageSize()">
-                        <option value="50">50 条/页</option>
-                        <option value="100">100 条/页</option>
-                        <option value="200" selected>200 条/页 (推荐大页面)</option>
-                        <option value="500">500 条/页</option>
-                        <option value="1000">1000 条/页</option>
-                    </select>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <button class="btn" id="btn-trace-prev" onclick="prevTracePage()">◀ 上一页</button>
-                    <span id="trace-page-info" style="font-size: 13px; font-weight: 600;">第 1 / 1 页</span>
-                    <button class="btn" id="btn-trace-next" onclick="nextTracePage()">下一页 ▶</button>
-                </div>
-            </div>
+            <div class="pagination-bar" id="trace-pagination"></div>
         </div>
 
         <!-- 4. 频次榜 Panel (倒数第二) -->
@@ -1005,6 +988,7 @@ function getDashboardHtml() {
 
         function renderPagination(containerId, page, pageSize, total, onPageChange) {
             const container = document.getElementById(containerId);
+            if (!container) return;
             const totalPages = Math.ceil(total / pageSize) || 1;
 
             container.innerHTML = \`
@@ -1018,6 +1002,8 @@ function getDashboardHtml() {
                         <option value="20" \${pageSize === 20 ? 'selected' : ''}>20 条</option>
                         <option value="50" \${pageSize === 50 ? 'selected' : ''}>50 条</option>
                         <option value="100" \${pageSize === 100 ? 'selected' : ''}>100 条</option>
+                        <option value="200" \${pageSize === 200 ? 'selected' : ''}>200 条</option>
+                        <option value="500" \${pageSize === 500 ? 'selected' : ''}>500 条</option>
                     </select>
                     <button class="page-btn" \${page >= totalPages ? 'disabled' : ''} onclick="changePage('\${containerId}', \${page + 1})">下一页</button>
                     <button class="page-btn" \${page >= totalPages ? 'disabled' : ''} onclick="changePage('\${containerId}', \${totalPages})">尾页</button>
@@ -1029,13 +1015,38 @@ function getDashboardHtml() {
 
         function changePage(containerId, targetPage) {
             const cb = window['cb_' + containerId];
-            const ps = containerId === 'repeated-pagination' ? curRepeatedPageSize : curSlowPageSize;
-            if (cb) cb(targetPage, ps);
+            if (cb) {
+                cb(targetPage, getPageSizeByContainer(containerId));
+                scrollToTableTop(containerId);
+            }
         }
 
         function changePageSize(containerId, newSize) {
             const cb = window['cb_' + containerId];
-            if (cb) cb(1, parseInt(newSize, 10));
+            if (cb) {
+                cb(1, parseInt(newSize, 10));
+                scrollToTableTop(containerId);
+            }
+        }
+
+        function getPageSizeByContainer(containerId) {
+            if (containerId === 'repeated-pagination') return curRepeatedPageSize;
+            if (containerId === 'slow-pagination') return curSlowPageSize;
+            if (containerId === 'trace-pagination') return curTracePageSize;
+            if (containerId === 'detail-pagination') return curDetailPageSize;
+            return 20;
+        }
+
+        function scrollToTableTop(containerId) {
+            const bar = document.getElementById(containerId);
+            if (bar) {
+                const container = bar.closest('.panel')?.querySelector('.table-container');
+                if (container) {
+                    container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    return;
+                }
+            }
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         let curTracePage = 1;
@@ -1047,9 +1058,6 @@ function getDashboardHtml() {
             if (!traceId) return;
 
             curTracePage = page;
-            const pageSizeSelect = document.getElementById('trace-pagesize');
-            if (pageSizeSelect) curTracePageSize = parseInt(pageSizeSelect.value, 10) || 200;
-
             const res = await fetch(\`/api/trace?traceId=\${encodeURIComponent(traceId)}&page=\${curTracePage}&pageSize=\${curTracePageSize}\`);
             const json = await res.json();
             if (json.success) {
@@ -1057,42 +1065,14 @@ function getDashboardHtml() {
                 const pageOffset = (curTracePage - 1) * curTracePageSize;
                 rawTraceData = (json.data || []).map((item, idx) => ({ ...item, _origIndex: pageOffset + idx }));
                 sortAndRenderTraceTable();
-                updateTracePaginationUI();
+                renderPagination('trace-pagination', curTracePage, curTracePageSize, totalTraceCount, (p, ps) => {
+                    curTracePageSize = ps;
+                    loadTraceData(p);
+                });
             }
         }
 
-        function changeTracePageSize() {
-            const pageSizeSelect = document.getElementById('trace-pagesize');
-            if (pageSizeSelect) curTracePageSize = parseInt(pageSizeSelect.value, 10) || 200;
-            loadTraceData(1);
-        }
 
-        function prevTracePage() {
-            if (curTracePage > 1) {
-                loadTraceData(curTracePage - 1);
-            }
-        }
-
-        function nextTracePage() {
-            const maxPage = Math.ceil(totalTraceCount / curTracePageSize) || 1;
-            if (curTracePage < maxPage) {
-                loadTraceData(curTracePage + 1);
-            }
-        }
-
-        function updateTracePaginationUI() {
-            const pBar = document.getElementById('trace-pagination-bar');
-            if (!pBar) return;
-            if (totalTraceCount === 0) {
-                pBar.style.display = 'none';
-                return;
-            }
-            pBar.style.display = 'flex';
-            const maxPage = Math.ceil(totalTraceCount / curTracePageSize) || 1;
-            document.getElementById('trace-page-info').innerText = \`第 \${curTracePage} / \${maxPage} 页 (共 \${totalTraceCount.toLocaleString()} 条)\`;
-            document.getElementById('btn-trace-prev').disabled = (curTracePage <= 1);
-            document.getElementById('btn-trace-next').disabled = (curTracePage >= maxPage);
-        }
 
         /**
          * Trace 链路渲染（保持天然日志时间执行顺序）
@@ -1120,7 +1100,8 @@ function getDashboardHtml() {
             if (data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">未查找到符合条件的 SQL 记录</td></tr>';
                 summary.innerText = '';
-                updateTracePaginationUI();
+                const pContainer = document.getElementById('trace-pagination');
+                if (pContainer) pContainer.innerHTML = '';
                 return;
             }
 
