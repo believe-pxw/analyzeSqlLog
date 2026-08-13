@@ -197,6 +197,26 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
 
         // 解析 SQL执行信息
         if (line.includes('SQL执行信息:')) {
+            if (currentRecord && (currentRecord.sql_template || currentRecord.full_sql)) {
+                await flushCurrent();
+            }
+            if (!currentRecord) {
+                currentRecord = {
+                    id: 0,
+                    log_time: lastHeaderInfo.logTime,
+                    trace_id: lastHeaderInfo.traceId,
+                    thread_name: lastHeaderInfo.threadName,
+                    exec_time_ms: 0,
+                    result_rows: 0,
+                    db_manager: '',
+                    sql_template: '',
+                    sql_params: '',
+                    full_sql: '',
+                    line_number: totalLines,
+                    source_file: path.resolve(filePath)
+                };
+            }
+
             const rowMatch = line.match(/影响行数:\[(\d+)\s*rows\]/i);
             if (rowMatch) currentRecord.result_rows = parseInt(rowMatch[1], 10);
 
@@ -210,6 +230,23 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
 
         // 解析 SQL语句:
         if (line.includes('SQL语句:')) {
+            if (currentRecord && currentRecord.sql_template) {
+                await flushCurrent();
+                currentRecord = {
+                    id: 0,
+                    log_time: lastHeaderInfo.logTime,
+                    trace_id: lastHeaderInfo.traceId,
+                    thread_name: lastHeaderInfo.threadName,
+                    exec_time_ms: 0,
+                    result_rows: 0,
+                    db_manager: '',
+                    sql_template: '',
+                    sql_params: '',
+                    full_sql: '',
+                    line_number: totalLines,
+                    source_file: path.resolve(filePath)
+                };
+            }
             captureState = 'sql_template';
             const idx = line.indexOf('SQL语句:[');
             let content = '';

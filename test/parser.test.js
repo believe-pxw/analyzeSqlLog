@@ -845,3 +845,31 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
     }
 });
 
+test('26. 独立新增测试：连续打出 SQL执行信息 与 SELECT @@... 时的无损防覆盖闭合测试', async () => {
+    const sampleLog = `2026-08-13 15:52:40.193 770491858398800 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [Main_r64yutf91703842bcf68c80-0] [r64yutf91703842bcf68c80-1] [-] [main] com.bokesoft.yes.mid.connection.dbmanager.GeneralDBManager 
+>SQL执行信息:影响行数:[1 rows]      执行时间:[45ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@15fcc93b] 
+>SQL语句:[SELECT @@lower_case_table_names] 
+>SQL执行信息:影响行数:[2 rows]      执行时间:[10ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@15fcc93b] 
+>SQL语句:[SELECT 1]`;
+
+    const tmpLogPath = path.join(__dirname, 'temp_consecutive_sql.log');
+    fs.writeFileSync(tmpLogPath, sampleLog);
+
+    try {
+        const records = [];
+        const res = await parseLogFile(tmpLogPath, (record) => {
+            records.push(record);
+        });
+
+        assert.strictEqual(res.totalRecords, 2, '连续 SQL 应解析出 2 条记录');
+        assert.strictEqual(records.length, 2);
+        assert.strictEqual(records[0].sql_template, 'SELECT @@lower_case_table_names');
+        assert.strictEqual(records[0].exec_time_ms, 45);
+        assert.strictEqual(records[1].sql_template, 'SELECT 1');
+        assert.strictEqual(records[1].exec_time_ms, 10);
+    } finally {
+        if (fs.existsSync(tmpLogPath)) fs.unlinkSync(tmpLogPath);
+    }
+});
+
+
