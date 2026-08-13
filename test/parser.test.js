@@ -652,6 +652,19 @@ test('24. 独立新增测试：校验 server.js 渲染出的前端 HTML 页面�
     const scriptEnd = html.indexOf('</script>');
     const jsCode = html.slice(scriptStart, scriptEnd);
 
+    // 断言 6 大 Tab 面板在 HTML 中 100% 存在
+    assert.ok(html.includes('id="panel-diagnose"'), '应包含 panel-diagnose 面板');
+    assert.ok(html.includes('id="panel-slow"'), '应包含 panel-slow 面板');
+    assert.ok(html.includes('id="panel-trace"'), '应包含 panel-trace 面板');
+    assert.ok(html.includes('id="panel-repeated"'), '应包含 panel-repeated 面板');
+    assert.ok(html.includes('id="panel-detail"'), '应包含 panel-detail 面板');
+    assert.ok(html.includes('id="panel-overview"'), '应包含 panel-overview 面板');
+
+    // 校验 HTML 中 <table> 与 </table> 标签 100% 闭合对称
+    const openTables = (html.match(/<table\b/g) || []).length;
+    const closeTables = (html.match(/<\/table>/g) || []).length;
+    assert.strictEqual(openTables, closeTables, `HTML <table> 开始标签数(${openTables}) 应与 </table> 结束标签数(${closeTables}) 严格相等`);
+
     // 断言 vm.Script 解析前端生成的脚本不抛出 SyntaxError
     assert.doesNotThrow(() => {
         new vm.Script(jsCode);

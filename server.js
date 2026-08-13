@@ -677,6 +677,7 @@ function getDashboardHtml() {
                         </tr>
                     </thead>
                     <tbody id="trace-tbody"><tr><td colspan="6" style="text-align: center;">请输入 TraceID 进行查询</td></tr></tbody>
+                </table>
             </div>
             <div class="pagination-bar" id="trace-pagination"></div>
         </div>
