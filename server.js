@@ -1297,11 +1297,16 @@ function getDashboardHtml() {
         function compressSqlColumnsFrontend(sql) {
             if (!sql) return '';
             const str = sql.trim();
-            const match = str.match(/(select\s+)([\s\S]+?)(\s+from\b[\s\S]+)/i);
-            if (match && (match[2].includes(',') || match[2].trim().length > 15)) {
-                return match[1] + '... ' + match[3].trim();
+            const match = str.match(/(select\\s+)([\\s\\S]+?)(\\s+from\\b[\\s\\S]+)/i);
+            if (match) {
+                const selectHead = match[1];
+                const cols = match[2];
+                const fromTail = match[3];
+                if (cols.includes(',') || cols.trim().length > 15) {
+                    return selectHead + '... ' + fromTail.trim();
+                }
             }
-            return str.length > 200 ? str.substring(0, 200) + '...' : str;
+            return str;
         }
 
         function renderDetailTable(data) {
