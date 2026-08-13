@@ -1,6 +1,7 @@
 const fs = require('fs');
 const readline = require('readline');
 const path = require('path');
+const zlib = require('zlib');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const os = require('os');
 
@@ -86,9 +87,19 @@ function cleanSqlText(text) {
  * @returns {Promise<{totalLines: number, totalRecords: number}>}
  */
 async function parseLogFile(filePath, onRecord, startRecordId = 0) {
-    const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 });
+    let inputStream;
+    if (filePath.endsWith('.gz')) {
+        const gzStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
+        const gunzip = zlib.createGunzip();
+        gzStream.on('error', (err) => console.error(`读取压缩文件失败 [${filePath}]:`, err.message));
+        gunzip.on('error', (err) => console.error(`解压压缩文件失败 [${filePath}]:`, err.message));
+        inputStream = gzStream.pipe(gunzip);
+    } else {
+        inputStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 });
+    }
+
     const rl = readline.createInterface({
-        input: fileStream,
+        input: inputStream,
         crlfDelay: Infinity
     });
 
@@ -263,7 +274,8 @@ async function parseLogs(targetPath, onRecord) {
                 } else if (entry.isFile()) {
                     const f = entry.name;
                     const isServerInfoOrError = /server-info|server-error/i.test(f);
-                    if ((f.endsWith('.log') || f.endsWith('.txt')) && isServerInfoOrError) {
+                    const isSupportedExt = f.endsWith('.log') || f.endsWith('.txt') || f.endsWith('.gz') || f.endsWith('.log.gz');
+                    if (isSupportedExt && isServerInfoOrError) {
                         files.push(fullPath);
                     }
                 }

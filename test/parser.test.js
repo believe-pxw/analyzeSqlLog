@@ -437,3 +437,28 @@ test('19. 独立新增测试：createServer HTTP 服务 WHATWG URL API 路由与
     }
 });
 
+test('20. 独立新增测试：parseLogs 与 parseLogFile 兼容支持 .gz 压缩日志解压与 SQL 提取断言测试', async () => {
+    const zlib = require('zlib');
+    const tempDir = path.join(__dirname, 'test_gz_logs_dir');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+
+    const gzFile = path.join(tempDir, 'DevNode-server-info-06-01-2026-1.log.gz');
+    const logContent = '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-gz-1] [] [] [w-1] com.bokesoft.yes.mid.connection.dbmanager.PreparedStatementWithLog\n>SQL执行信息:影响行数:[3 rows] 执行时间:[15ms]\n>SQL语句:[select * from gz_table]';
+
+    const buffer = zlib.gzipSync(Buffer.from(logContent, 'utf-8'));
+    fs.writeFileSync(gzFile, buffer);
+
+    const records = [];
+    const res = await parseLogs(tempDir, (r) => records.push(r));
+
+    assert.strictEqual(res.totalFiles, 1);
+    assert.strictEqual(records.length, 1);
+    assert.strictEqual(records[0].trace_id, 't-gz-1');
+    assert.strictEqual(records[0].exec_time_ms, 15);
+    assert.strictEqual(records[0].sql_template, 'select * from gz_table');
+
+    fs.unlinkSync(gzFile);
+    fs.rmdirSync(tempDir);
+});
+
+
