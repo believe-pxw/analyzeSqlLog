@@ -1,5 +1,4 @@
 const http = require('http');
-const url = require('url');
 
 function safeJsonStringify(obj) {
     return JSON.stringify(obj, (key, value) =>
@@ -39,8 +38,9 @@ function attachBriefSql(rows, sqlKey = 'sql_template') {
 
 function createServer(dbInstance, parseStats, port = 3000) {
     const server = http.createServer(async (req, res) => {
-        const parsedUrl = url.parse(req.url, true);
+const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const pathname = parsedUrl.pathname;
+        const query = Object.fromEntries(parsedUrl.searchParams);
         const method = req.method.toUpperCase();
 
         // 统一 CORS & JSON 响应
@@ -63,10 +63,10 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/top-repeated' && method === 'GET') {
-                    const page = parseInt(parsedUrl.query.page, 10) || 1;
-                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 20;
-                    const traceId = parsedUrl.query.traceId || '';
-                    const excludeBg = parsedUrl.query.excludeBackground === 'true';
+                    const page = parseInt(query.page, 10) || 1;
+                    const pageSize = parseInt(query.pageSize, 10) || 20;
+                    const traceId = query.traceId || '';
+                    const excludeBg = query.excludeBackground === 'true';
                     
                     const result = await dbInstance.getTopRepeated(page, pageSize, traceId, excludeBg);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
@@ -74,10 +74,10 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/top-slow' && method === 'GET') {
-                    const page = parseInt(parsedUrl.query.page, 10) || 1;
-                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 20;
-                    const traceId = parsedUrl.query.traceId || '';
-                    const excludeBg = parsedUrl.query.excludeBackground === 'true';
+                    const page = parseInt(query.page, 10) || 1;
+                    const pageSize = parseInt(query.pageSize, 10) || 20;
+                    const traceId = query.traceId || '';
+                    const excludeBg = query.excludeBackground === 'true';
 
                     const result = await dbInstance.getTopSlow(page, pageSize, traceId, excludeBg);
                     const processedRows = attachBriefSql(result.rows, 'full_sql');
@@ -85,10 +85,10 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/trace' && method === 'GET') {
-                    const traceId = parsedUrl.query.traceId || '';
-                    const pageStr = parsedUrl.query.page;
+                    const traceId = query.traceId || '';
+                    const pageStr = query.page;
                     const page = pageStr ? (parseInt(pageStr, 10) || 1) : null;
-                    const pageSize = parseInt(parsedUrl.query.pageSize, 10) || 200;
+                    const pageSize = parseInt(query.pageSize, 10) || 200;
 
                     const result = await dbInstance.getByTraceId(traceId, page, pageSize);
                     if (page === null) {
@@ -107,7 +107,7 @@ function createServer(dbInstance, parseStats, port = 3000) {
                 }
 
                 if (pathname === '/api/diagnostics' && method === 'GET') {
-                    const traceId = parsedUrl.query.traceId || '';
+                    const traceId = query.traceId || '';
                     const rows = await dbInstance.getDiagnostics(traceId);
                     const processedRows = attachBriefSql(rows, 'sql_template');
                     return res.end(safeJsonStringify({ success: true, data: processedRows }));
@@ -150,12 +150,15 @@ function createServer(dbInstance, parseStats, port = 3000) {
     process.once('SIGTERM', cleanup);
 
     server.listen(port, () => {
-        const { exec } = require('child_process');
-        const url = `http://localhost:${port}`;
+        const actualPort = server.address().port;
+        const url = `http://localhost:${actualPort}`;
         console.log(`\n==================================================`);
         console.log(`🚀 SQL 日志分析器控制台已成功启动: ${url}`);
         console.log(`==================================================\n`);
-        exec(`start ${url}`);
+        if (process.env.NODE_ENV !== 'test' && port !== 0) {
+            const { exec } = require('child_process');
+            exec(`start ${url}`);
+        }
     });
 
     return server;

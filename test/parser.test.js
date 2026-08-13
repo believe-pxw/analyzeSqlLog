@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseLogs, parseLogFile, parseTimeToMs, cleanSqlText } = require('../parser');
 const SqlLogDatabase = require('../db');
-const { compressSqlColumns } = require('../server');
+const { compressSqlColumns, createServer } = require('../server');
 
 test('1. parseTimeToMs 耗时转换测试 (支持 TimeCostLevel 扩展格式)', () => {
     assert.strictEqual(parseTimeToMs('0ms'), 0);
@@ -388,3 +388,52 @@ test('18. 独立新增测试：Trace 链路后端大页面分页与单接口向�
     assert.strictEqual(Array.isArray(allRows), true);
     assert.strictEqual(allRows.length, 350);
 });
+
+test('19. 独立新增测试：createServer HTTP 服务 WHATWG URL API 路由与查询参数响应测试', async () => {
+    try {
+        const db = new SqlLogDatabase(':memory:');
+        await db.initSchema();
+        await db.insertBatch([{
+            id: 1,
+            log_time: '2026-08-12 10:00:00.000',
+            trace_id: 't-http-test',
+            thread_name: 'th-1',
+            exec_time_ms: 50,
+            result_rows: 1,
+            db_manager: 'mysql',
+            sql_template: 'SELECT * FROM test_table WHERE id = ?',
+            sql_params: '1',
+            full_sql: 'SELECT * FROM test_table WHERE id = 1'
+        }]);
+
+        const server = createServer(db, { totalFiles: 1, totalLines: 10 }, 0);
+        if (!server.listening) {
+            await new Promise(resolve => server.once('listening', resolve));
+        }
+        const port = server.address().port;
+
+        const resTop = await fetch(`http://127.0.0.1:${port}/api/top-repeated?page=1&pageSize=10`);
+        const jsonTop = await resTop.json();
+        assert.strictEqual(resTop.status, 200);
+        assert.strictEqual(jsonTop.success, true);
+        assert.strictEqual(jsonTop.data.length, 1);
+
+        const resSlow = await fetch(`http://127.0.0.1:${port}/api/top-slow?page=1&pageSize=10`);
+        const jsonSlow = await resSlow.json();
+        assert.strictEqual(resSlow.status, 200);
+        assert.strictEqual(jsonSlow.success, true);
+        assert.strictEqual(jsonSlow.data.length, 1);
+
+        const resTrace = await fetch(`http://127.0.0.1:${port}/api/trace?traceId=t-http-test&page=1`);
+        const jsonTrace = await resTrace.json();
+        assert.strictEqual(resTrace.status, 200);
+        assert.strictEqual(jsonTrace.success, true);
+        assert.strictEqual(jsonTrace.data.length, 1);
+
+        server.close();
+    } catch (err) {
+        console.error('Test 19 Failed:', err);
+        throw err;
+    }
+});
+
