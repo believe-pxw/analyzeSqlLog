@@ -901,16 +901,21 @@ function getDashboardHtml() {
             const traceId = document.getElementById('trace-repeated').value.trim();
             const excludeBg = document.getElementById('chk-repeated-bg').checked;
 
-            const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
-            const json = await res.json();
-            if (json.success) {
-                rawRepeatedData = json.data;
-                totalRepeatedCount = json.total;
-                renderRepeatedTable(rawRepeatedData);
-                renderPagination('repeated-pagination', curRepeatedPage, curRepeatedPageSize, totalRepeatedCount, (p, ps) => {
-                    curRepeatedPageSize = ps;
-                    loadRepeated(p);
-                });
+            try {
+                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+                const json = await res.json();
+                if (json.success) {
+                    rawRepeatedData = json.data;
+                    totalRepeatedCount = json.total;
+                    renderRepeatedTable(rawRepeatedData);
+                    renderPagination('repeated-pagination', curRepeatedPage, curRepeatedPageSize, totalRepeatedCount, (p, ps) => {
+                        curRepeatedPageSize = ps;
+                        loadRepeated(p);
+                    });
+                }
+            } catch(e) {
+                const tbody = document.getElementById('repeated-tbody');
+                if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-red);">⚠️ 网络通信错误，无法连接后端服务 (' + escapeHtml(e.message) + ')</td></tr>';
             }
         }
 
@@ -955,16 +960,21 @@ function getDashboardHtml() {
             const traceId = document.getElementById('trace-slow').value.trim();
             const excludeBg = document.getElementById('chk-slow-bg').checked;
 
-            const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
-            const json = await res.json();
-            if (json.success) {
-                rawSlowData = json.data;
-                totalSlowCount = json.total;
-                renderSlowTable(rawSlowData);
-                renderPagination('slow-pagination', curSlowPage, curSlowPageSize, totalSlowCount, (p, ps) => {
-                    curSlowPageSize = ps;
-                    loadSlow(p);
-                });
+            try {
+                const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
+                const json = await res.json();
+                if (json.success) {
+                    rawSlowData = json.data;
+                    totalSlowCount = json.total;
+                    renderSlowTable(rawSlowData);
+                    renderPagination('slow-pagination', curSlowPage, curSlowPageSize, totalSlowCount, (p, ps) => {
+                        curSlowPageSize = ps;
+                        loadSlow(p);
+                    });
+                }
+            } catch(e) {
+                const tbody = document.getElementById('slow-tbody');
+                if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--accent-red);">⚠️ 网络通信错误，无法连接后端服务 (' + escapeHtml(e.message) + ')</td></tr>';
             }
         }
 

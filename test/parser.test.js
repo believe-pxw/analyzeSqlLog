@@ -658,3 +658,101 @@ test('24. 独立新增测试：校验 server.js 渲染出的前端 HTML 页面�
     }, '前端生成的 JS 代码不应包含任何语法错误');
 });
 
+test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 Web 页面与 API 端到端集成测试，断言每个页面均有数据输出', async () => {
+    // 1. 初始化纯内存数据库
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    // 2. 解析 test/fixtures 真实测试日志并批量装载入库
+    const fixturesDir = path.join(__dirname, 'fixtures');
+    const records = [];
+    await parseLogs(fixturesDir, async (record) => {
+        records.push(record);
+        if (records.length >= 10000) {
+            await testDb.insertBatch(records.splice(0, records.length));
+        }
+    });
+    if (records.length > 0) {
+        await testDb.insertBatch(records);
+    }
+
+    const parseStats = { totalFiles: 2, totalLines: 1000, totalRecords: 500, costMs: 50 };
+
+    // 3. 动态分配随机可用端口启动 HTTP 服务
+    const server = createServer(testDb, parseStats, 0);
+    const address = server.address();
+    const port = address.port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+        // 校验 1: 主页 Dashboard HTML 接入
+        const resHome = await fetch(`${baseUrl}/`);
+        assert.strictEqual(resHome.status, 200);
+        const htmlText = await resHome.text();
+        assert.ok(htmlText.includes('SQL 日志分析器'), '主页应包含标题');
+        assert.ok(htmlText.includes('panel-repeated'), '主页应包含频次榜面板');
+
+        // 校验 2: GET /api/summary 概览接口
+        const resSummary = await fetch(`${baseUrl}/api/summary`);
+        const jsonSummary = await resSummary.json();
+        assert.strictEqual(jsonSummary.success, true);
+        assert.ok(jsonSummary.data.total_sqls > 0, '概览解析 SQL 总数应大于 0');
+
+        // 校验 3: GET /api/top-repeated SQL 频次榜接口 (断言有真实数据出来!)
+        const resRepeated = await fetch(`${baseUrl}/api/top-repeated?page=1&pageSize=20`);
+        const jsonRepeated = await resRepeated.json();
+        assert.strictEqual(jsonRepeated.success, true);
+        assert.ok(jsonRepeated.total > 0, `SQL 频次榜总数应大于 0, 实际: ${jsonRepeated.total}`);
+        assert.ok(jsonRepeated.data.length > 0, `SQL 频次榜第一页应有数据记录, 实际: ${jsonRepeated.data.length}`);
+        
+        const sampleRecord = jsonRepeated.data[0];
+        assert.ok(sampleRecord.sql_template, '频次榜记录应包含 sql_template');
+
+        // 校验 4: GET /api/top-slow 慢 SQL 排行接口 (断言有真实数据出来!)
+        const resSlow = await fetch(`${baseUrl}/api/top-slow?page=1&pageSize=20`);
+        const jsonSlow = await resSlow.json();
+        assert.strictEqual(jsonSlow.success, true);
+        assert.ok(jsonSlow.total > 0, `慢 SQL 排行总数应大于 0, 实际: ${jsonSlow.total}`);
+        assert.ok(jsonSlow.data.length > 0, `慢 SQL 第一页应有数据记录, 实际: ${jsonSlow.data.length}`);
+
+        // 校验 5: GET /api/diagnostics N+1 循环诊断接口
+        const resDiag = await fetch(`${baseUrl}/api/diagnostics?page=1&pageSize=20`);
+        const jsonDiag = await resDiag.json();
+        assert.strictEqual(jsonDiag.success, true);
+        assert.ok(Array.isArray(jsonDiag.data), '诊断结果应为数组');
+
+        // 校验 6: GET /api/by-template SQL 调用明细接口 (断言有真实数据出来!)
+        const testTemplate = sampleRecord.sql_template;
+        const resDetail = await fetch(`${baseUrl}/api/by-template?sqlTemplate=${encodeURIComponent(testTemplate)}&page=1&pageSize=10`);
+        const jsonDetail = await resDetail.json();
+        assert.strictEqual(jsonDetail.success, true);
+        assert.ok(jsonDetail.total > 0, `SQL 明细总数应大于 0, 实际: ${jsonDetail.total}`);
+        assert.ok(jsonDetail.data.length > 0, `SQL 明细第一页应有数据, 实际: ${jsonDetail.data.length}`);
+        assert.ok(jsonDetail.data[0].source_file, '明细数据应包含 source_file 绝对路径');
+        assert.ok(jsonDetail.data[0].line_number > 0, '明细数据应包含有效 line_number 行号');
+
+        // 校验 7: GET /api/trace Trace 链路分析接口 (断言有真实数据出来!)
+        const sampleTraceId = jsonDetail.data[0].trace_id;
+        if (sampleTraceId && sampleTraceId !== '-') {
+            const resTrace = await fetch(`${baseUrl}/api/trace?traceId=${encodeURIComponent(sampleTraceId)}&page=1&pageSize=50`);
+            const jsonTrace = await resTrace.json();
+            assert.strictEqual(jsonTrace.success, true);
+            assert.ok(jsonTrace.total > 0, `Trace 链路总数应大于 0, 实际: ${jsonTrace.total}`);
+            assert.ok(jsonTrace.data.length > 0, `Trace 链路列表应有数据, 实际: ${jsonTrace.data.length}`);
+        }
+
+        // 校验 8: GET /api/decompress-gz 压缩包解压接口
+        const gzFixture = path.join(fixturesDir, 'sample-server-info.log.gz');
+        if (fs.existsSync(gzFixture)) {
+            const resGz = await fetch(`${baseUrl}/api/decompress-gz?filePath=${encodeURIComponent(gzFixture)}`);
+            const jsonGz = await resGz.json();
+            assert.strictEqual(jsonGz.success, true);
+            assert.ok(jsonGz.decompressedPath && fs.existsSync(jsonGz.decompressedPath), '解压后文件应真实存在');
+        }
+    } finally {
+        // 关闭资源
+        await new Promise(resolve => server.close(resolve));
+        await testDb.close();
+    }
+});
+
