@@ -898,8 +898,10 @@ function getDashboardHtml() {
 
         async function loadRepeated(page = 1) {
             curRepeatedPage = page;
-            const traceId = document.getElementById('trace-repeated').value.trim();
-            const excludeBg = document.getElementById('chk-repeated-bg').checked;
+            const traceEl = document.getElementById('trace-repeated');
+            const traceId = traceEl ? traceEl.value.trim() : '';
+            const bgEl = document.getElementById('chk-repeated-bg');
+            const excludeBg = bgEl ? bgEl.checked : false;
 
             try {
                 const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);
@@ -921,7 +923,8 @@ function getDashboardHtml() {
 
         function renderRepeatedTable(data) {
             const tbody = document.getElementById('repeated-tbody');
-            if (data.length === 0) {
+            if (!tbody) return;
+            if (!data || data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align: center;">未找到符合条件的 SQL</td></tr>';
                 return;
             }
@@ -950,15 +953,18 @@ function getDashboardHtml() {
         }
 
         function filterRepeatedTable() {
-            const q = document.getElementById('search-repeated').value.toLowerCase();
+            const searchEl = document.getElementById('search-repeated');
+            const q = searchEl ? searchEl.value.toLowerCase() : '';
             const filtered = rawRepeatedData.filter(d => (d.sql_template || '').toLowerCase().includes(q));
             renderRepeatedTable(filtered);
         }
 
         async function loadSlow(page = 1) {
             curSlowPage = page;
-            const traceId = document.getElementById('trace-slow').value.trim();
-            const excludeBg = document.getElementById('chk-slow-bg').checked;
+            const traceEl = document.getElementById('trace-slow');
+            const traceId = traceEl ? traceEl.value.trim() : '';
+            const bgEl = document.getElementById('chk-slow-bg');
+            const excludeBg = bgEl ? bgEl.checked : false;
 
             try {
                 const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&excludeBackground=\${excludeBg}\`);

@@ -749,6 +749,82 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
             assert.strictEqual(jsonGz.success, true);
             assert.ok(jsonGz.decompressedPath && fs.existsSync(jsonGz.decompressedPath), '解压后文件应真实存在');
         }
+
+        // 校验 9: 前端 DOM 页面渲染全覆盖断言测试 (模拟真实 DOM 环境调用前端 render 函数)
+        const mockDomMap = {
+            'repeated-tbody': { innerHTML: '' },
+            'slow-tbody': { innerHTML: '' },
+            'diagnose-tbody': { innerHTML: '' },
+            'detail-tbody': { innerHTML: '' },
+            'trace-tbody': { innerHTML: '' },
+            'detail-header': { innerHTML: '' },
+            'trace-summary': { innerText: '' },
+            'trace-input': { value: sampleTraceId || 'test-trace' },
+            'trace-repeated': { value: '' },
+            'chk-repeated-bg': { checked: false },
+            'trace-slow': { value: '' },
+            'chk-slow-bg': { checked: false },
+            'search-repeated': { value: '' },
+            'search-slow': { value: '' },
+            'search-diagnose': { value: '' },
+            'search-trace-sql': { value: '' },
+            'repeated-pagination': { innerHTML: '' },
+            'slow-pagination': { innerHTML: '' },
+            'diagnose-pagination': { innerHTML: '' },
+            'detail-pagination': { innerHTML: '' },
+            'trace-pagination': { innerHTML: '' }
+        };
+
+        const mockDocument = {
+            getElementById: (id) => mockDomMap[id] || null,
+            querySelectorAll: () => [],
+            addEventListener: () => {}
+        };
+
+        const vm = require('vm');
+        const serverFileContent = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf-8');
+        const fnStart = serverFileContent.indexOf('function getDashboardHtml()');
+        const fnEnd = serverFileContent.indexOf('module.exports');
+        const fnCode = serverFileContent.slice(fnStart, fnEnd);
+        const getDashboardHtml = new Function(fnCode + '\nreturn getDashboardHtml();');
+        const html = getDashboardHtml();
+        const scriptStart = html.indexOf('<script>') + 8;
+        const scriptEnd = html.indexOf('</script>');
+        const jsCode = html.slice(scriptStart, scriptEnd);
+
+        const sandbox = {
+            document: mockDocument,
+            window: { open: () => {} },
+            navigator: { clipboard: { writeText: async () => {} } },
+            fetch: globalThis.fetch,
+            console
+        };
+        const context = vm.createContext(sandbox);
+        vm.runInContext(jsCode, context);
+
+        // A. 校验频次榜前端 DOM 真正渲染出 <tr>...</tr> 节点与查看调用按钮！
+        context.renderRepeatedTable(jsonRepeated.data);
+        const repeatedHtml = mockDomMap['repeated-tbody'].innerHTML;
+        assert.ok(repeatedHtml.includes('<tr') && repeatedHtml.includes('btn-view-calls'), '频次榜 HTML 应真正渲染出 <tr> 和 查看调用 按钮');
+        assert.ok(!repeatedHtml.includes('未找到符合条件的 SQL'), '频次榜 HTML 不应是空提示');
+
+        // B. 校验慢 SQL 前端 DOM 真正渲染出 <tr>...</tr> 节点与 VSCode 跳转按钮！
+        context.renderSlowTable(jsonSlow.data);
+        const slowHtml = mockDomMap['slow-tbody'].innerHTML;
+        assert.ok(slowHtml.includes('<tr') && slowHtml.includes('btn-vscode'), '慢 SQL HTML 应真正渲染出 <tr> 和 VSCode 按钮');
+
+        // C. 校验明细表格前端 DOM 真正渲染！
+        context.renderDetailTable(jsonDetail.data);
+        const detailHtml = mockDomMap['detail-tbody'].innerHTML;
+        assert.ok(detailHtml.includes('<tr'), '明细 HTML 应真正渲染出 <tr> 数据节点');
+
+        // D. 校验 Trace 链路表格前端 DOM 真正渲染！
+        if (jsonDetail.data.length > 0) {
+            context.rawTraceData = jsonDetail.data;
+            context.renderTraceTable(jsonDetail.data);
+            const traceHtml = mockDomMap['trace-tbody'].innerHTML;
+            assert.ok(traceHtml.includes('<tr'), 'Trace 链路 HTML 应真正渲染出 <tr> 数据节点');
+        }
     } finally {
         // 关闭资源
         await new Promise(resolve => server.close(resolve));
