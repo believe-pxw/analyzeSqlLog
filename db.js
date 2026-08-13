@@ -138,19 +138,11 @@ class SqlLogDatabase {
     }
 
     /**
-     * 📊 Top 频次 SQL 榜 (支持后端分页、TraceID过滤)
+     * 📊 Top 频次 SQL 榜 (全库 SQL 模板归一化频次与耗时统计，支持后端分页)
      */
-    async getTopRepeated(page = 1, pageSize = 20, traceId = '') {
-        let whereClause = 'WHERE 1=1';
-        const params = [];
-
-        if (traceId) {
-            whereClause += ' AND trace_id = ?';
-            params.push(traceId);
-        }
-
-        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs ${whereClause}`;
-        const countRows = await this.query(countSql, params);
+    async getTopRepeated(page = 1, pageSize = 20) {
+        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs`;
+        const countRows = await this.query(countSql);
         const total = countRows[0] ? Number(countRows[0].total) : 0;
 
         const offset = (page - 1) * pageSize;
@@ -163,12 +155,11 @@ class SqlLogDatabase {
                 MAX(exec_time_ms) as max_time_ms,
                 COUNT(DISTINCT trace_id) as trace_count
             FROM sqllogs
-            ${whereClause}
             GROUP BY sql_template
             ORDER BY count DESC, total_time_ms DESC
             LIMIT ? OFFSET ?
         `;
-        const rows = await this.query(dataSql, [...params, pageSize, offset]);
+        const rows = await this.query(dataSql, [pageSize, offset]);
         return { rows, total, page, pageSize };
     }
 

@@ -69,9 +69,8 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                 if (pathname === '/api/top-repeated' && method === 'GET') {
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
-                    const traceId = query.traceId || '';
                     
-                    const result = await dbInstance.getTopRepeated(page, pageSize, traceId);
+                    const result = await dbInstance.getTopRepeated(page, pageSize);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
                     return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
@@ -693,7 +692,6 @@ function getDashboardHtml() {
         <!-- 4. 频次榜 Panel (倒数第二) -->
         <div id="panel-repeated" class="panel">
             <div class="toolbar">
-                <input type="text" id="trace-repeated" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadRepeated(1)">
                 <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
             </div>
             <div class="table-container">
@@ -905,11 +903,9 @@ function getDashboardHtml() {
 
         async function loadRepeated(page = 1) {
             curRepeatedPage = page;
-            const traceEl = document.getElementById('trace-repeated');
-            const traceId = traceEl ? traceEl.value.trim() : '';
 
             try {
-                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&traceId=\${encodeURIComponent(traceId)}\`);
+                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawRepeatedData = json.data;
