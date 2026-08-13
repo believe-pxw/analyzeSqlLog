@@ -461,4 +461,49 @@ test('20. 独立新增测试：parseLogs 与 parseLogFile 兼容支持 .gz 压�
     fs.rmdirSync(tempDir);
 });
 
+test('21. 独立新增测试：getDiagnostics 自动过滤 UPDATE 语句断言测试', async () => {
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    const testRecords = [];
+    // 写入 6 条重复的 SELECT
+    for (let i = 0; i < 6; i++) {
+        testRecords.push({
+            id: i + 1,
+            log_time: '2026-08-12 10:00:00.000',
+            trace_id: 't-diag-test',
+            thread_name: 'th-1',
+            exec_time_ms: 10,
+            result_rows: 1,
+            db_manager: 'MySqlDBManager@123',
+            sql_template: 'SELECT * FROM user_table WHERE id = ?',
+            sql_params: '1',
+            full_sql: 'SELECT * FROM user_table WHERE id = 1'
+        });
+    }
+    // 写入 10 条重复的 UPDATE
+    for (let i = 0; i < 10; i++) {
+        testRecords.push({
+            id: i + 7,
+            log_time: '2026-08-12 10:00:00.000',
+            trace_id: 't-diag-test',
+            thread_name: 'th-1',
+            exec_time_ms: 20,
+            result_rows: 1,
+            db_manager: 'MySqlDBManager@123',
+            sql_template: 'UPDATE summary_table SET money = money + ? WHERE group_id = ?',
+            sql_params: '100, 1',
+            full_sql: 'UPDATE summary_table SET money = money + 100 WHERE group_id = 1'
+        });
+    }
+
+    await db.insertBatch(testRecords);
+
+    const diagResult = await db.getDiagnostics('t-diag-test');
+    assert.strictEqual(diagResult.length, 1);
+    assert.strictEqual(diagResult[0].sql_template, 'SELECT * FROM user_table WHERE id = ?');
+    assert.strictEqual(Number(diagResult[0].repeat_count), 6);
+});
+
+
 

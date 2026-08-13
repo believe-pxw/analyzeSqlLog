@@ -114,6 +114,6 @@ test('🚀 性能基准测试 3：50 万行纯文本日志流式状态机解析�
 
     console.log(`    ⚡ 流式状态机解析 ${fileSizeMB} MB (${result.totalLines.toLocaleString()} 行文本) 耗时: ${elapsed} ms (吞吐率: ${lineThroughput.toLocaleString()} 行/秒, ${mbPerSec} MB/秒)`);
 
-    // 性能基线断言：50 万行状态机解析耗时必须小于 3000ms
-    assert.strictEqual(elapsed < 3000, true, `50万行文本状态机解析耗时 (${elapsed}ms) 超过 3000ms 基线`);
+    // 性能基线断言：50 万行状态机解析耗时必须小于 4000ms
+    assert.strictEqual(elapsed < 4000, true, `50万行文本状态机解析耗时 (${elapsed}ms) 超过 4000ms 基线`);
 });

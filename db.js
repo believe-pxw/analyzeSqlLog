@@ -241,7 +241,7 @@ class SqlLogDatabase {
      * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID (支持 TraceID 过滤)，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
      */
     async getDiagnostics(traceId = '') {
-        let whereClause = "WHERE trace_id != '-' AND db_manager != ''";
+        let whereClause = "WHERE trace_id != '-' AND db_manager != '' AND LOWER(LTRIM(sql_template)) NOT LIKE 'update%'";
         const params = [];
 
         if (traceId) {
