@@ -196,11 +196,11 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 
 | Tab (data-tab) | 标题 | 说明 |
 |----------------|------|------|
-| `diagnose` | 💡 N+1 事务循环诊所 | 默认首页，自动检测 N+1 问题 |
+| `diagnose` | 🔁 事务内重复 SQL (N+1) 诊断 | 默认首页，基于 dbManager 句柄检测同一事务连接内重复 SQL |
 | `slow` | 🐢 慢 SQL 排行 | 按耗时降序，含 VSCode 跳转 |
 | `trace` | 🔗 Trace 链路分析 | 按 TraceID 查询时间线，含 VSCode 跳转 |
 | `repeated` | 📊 SQL 频次榜 | 按 SQL 模板聚合次数，含「查看调用」联动 |
-| `detail` | 📋 SQL 调用明细 | 由频次榜「查看调用」跳转触发，含 VSCode 跳转 |
+| `detail` | 📋 SQL 调用明细 | 由频次榜/诊断面板「查看调用」跳转触发，含 VSCode 跳转 |
 | `overview` | 📈 概览统计分析 | 统计卡片（总数/模板数/最大耗时等） |
 
 **前端关键交互：**
