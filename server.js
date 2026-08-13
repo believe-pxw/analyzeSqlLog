@@ -935,7 +935,7 @@ function getDashboardHtml() {
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                     <td>
-                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}')">🔍 查看调用</button>
+                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}', { source: 'repeated', count: \${r.count} })">🔍 查看调用</button>
                     </td>
                 </tr>
             \`;
@@ -1192,7 +1192,7 @@ function getDashboardHtml() {
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
                     </td>
                     <td>
-                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}')">🔍 查看调用</button>
+                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}', { source: 'diagnose', traceId: '\${r.trace_id}', dbManager: '\${escapeJs(r.db_manager)}', repeatCount: \${r.repeat_count} })">🔍 查看调用</button>
                     </td>
                 </tr>
             \`;
@@ -1222,12 +1222,14 @@ function getDashboardHtml() {
 
         // ==================== SQL 调用明细 (Detail) 功能 ====================
         let currentDetailTemplate = '';
+        let currentDetailContext = null;
         let curDetailPage = 1;
         let curDetailPageSize = 50;
         let totalDetailCount = 0;
 
-        function jumpToDetail(sqlTemplate) {
+        function jumpToDetail(sqlTemplate, contextInfo = null) {
             currentDetailTemplate = sqlTemplate;
+            currentDetailContext = contextInfo;
             switchTab('detail');
             loadDetailData(1);
         }
@@ -1246,15 +1248,48 @@ function getDashboardHtml() {
                     loadDetailData(p);
                 });
 
-                // 更新头部摘要 (完整条件展示 + 可折叠/可复制 SQL 模板卡片)
+                // 更新头部摘要 (展示完整过滤上下文条件：来源, TraceID, dbManager 事务句柄, 循环/执行频次)
                 const header = document.getElementById('detail-header');
                 const briefTemplate = compressSqlColumnsFrontend(currentDetailTemplate);
+                const ctx = currentDetailContext || {};
+
+                let contextTagsHtml = '';
+                if (ctx.source === 'diagnose') {
+                    const dbManagerStr = (ctx.dbManager || '').split('.').pop() || ctx.dbManager || '-';
+                    contextTagsHtml = \`
+                        <div style="margin-top: 4px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12.5px;">
+                            <span>来源: <b style="color: #8b5cf6;">🔁 事务内重复 SQL (N+1) 诊断</b></span>
+                            <span>TraceID: <a class="trace-link" onclick="jumpToTrace('\${ctx.traceId}')">\${ctx.traceId}</a></span>
+                            <span>dbManager 事务句柄: <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; color: #475569;">\${escapeHtml(dbManagerStr)}</code></span>
+                            <span>事务内循环: <b style="color: var(--accent-red);">\${ctx.repeatCount} 次</b></span>
+                            <span>全库匹配: <b>\${totalDetailCount.toLocaleString()} 条</b></span>
+                        </div>
+                    \`;
+                } else if (ctx.source === 'repeated') {
+                    contextTagsHtml = \`
+                        <div style="margin-top: 4px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12.5px;">
+                            <span>来源: <b style="color: #0284c7;">📊 SQL 频次榜</b></span>
+                            <span>全局频次: <b style="color: var(--accent-yellow);">\${ctx.count} 次</b></span>
+                            <span>匹配调用日志: <b>\${totalDetailCount.toLocaleString()} 条</b></span>
+                        </div>
+                    \`;
+                } else {
+                    contextTagsHtml = \`
+                        <div style="margin-top: 4px; font-size: 12.5px;">
+                            <span>匹配日志调用记录: <b>\${totalDetailCount.toLocaleString()} 条</b></span>
+                        </div>
+                    \`;
+                }
+
                 header.innerHTML = \`
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span>🔍 <b>SQL 模板调用明细</b>（过滤条件：<code>sql_template</code> 精准匹配 ｜ 匹配日志调用记录：<b>\${totalDetailCount.toLocaleString()}</b> 条）</span>
-                        <button class="btn" style="padding: 2px 10px; font-size: 11.5px; background: #8b5cf6;" onclick="copySqlText('\${escapeJs(currentDetailTemplate)}')">📋 复制完整 SQL 模板</button>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                        <div>
+                            <span style="font-size: 13.5px;">🔍 <b>SQL 模板调用明细</b></span>
+                            \${contextTagsHtml}
+                        </div>
+                        <button class="btn" style="padding: 3px 10px; font-size: 11.5px; background: #8b5cf6; white-space: nowrap;" onclick="copySqlText('\${escapeJs(currentDetailTemplate)}')">📋 复制完整 SQL 模板</button>
                     </div>
-                    <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 展开/收起 | 右键: 复制完整 SQL 模板" data-full="\${escapeHtml(currentDetailTemplate)}" data-brief="\${escapeHtml(briefTemplate)}">\${escapeHtml(briefTemplate)}</div>
+                    <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms 展开/收起 | 右键: 复制完整 SQL 模板" data-full="\${escapeHtml(currentDetailTemplate)}" data-brief="\${escapeHtml(briefTemplate)}">\${escapeHtml(briefTemplate)}</div>
                 \`;
             }
         }
