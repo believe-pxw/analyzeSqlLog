@@ -577,7 +577,7 @@ function getDashboardHtml() {
 
         <!-- Tab 菜单：增加 data-tab 属性实现精准联动高亮 -->
         <div class="tabs">
-            <button class="tab-btn active" data-tab="diagnose" onclick="switchTab('diagnose')">💡 N+1 事务循环诊所</button>
+            <button class="tab-btn active" data-tab="diagnose" onclick="switchTab('diagnose')">🔁 事务内重复 SQL (N+1) 诊断</button>
             <button class="tab-btn" data-tab="slow" onclick="switchTab('slow')">🐢 慢 SQL 排行</button>
             <button class="tab-btn" data-tab="trace" onclick="switchTab('trace')">🔗 Trace 链路分析</button>
             <button class="tab-btn" data-tab="repeated" onclick="switchTab('repeated')">📊 SQL 频次榜</button>
@@ -605,9 +605,10 @@ function getDashboardHtml() {
                             <th style="width: 110px;">事务内浪费耗时</th>
                             <th style="width: 160px;">诊断重构建议</th>
                             <th>SQL 模板 (左键: 展开/收起 | 右键: 复制完整 SQL)</th>
+                            <th style="width: 80px;">操作</th>
                         </tr>
                     </thead>
-                    <tbody id="diagnose-tbody"><tr><td colspan="7" style="text-align: center;">加载中...</td></tr></tbody>
+                    <tbody id="diagnose-tbody"><tr><td colspan="8" style="text-align: center;">加载中...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -1161,7 +1162,7 @@ function getDashboardHtml() {
         function renderDiagnoseTable(data) {
             const tbody = document.getElementById('diagnose-tbody');
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
                 return;
             }
             tbody.innerHTML = data.map((r, i) => {
@@ -1184,6 +1185,9 @@ function getDashboardHtml() {
                     <td style="color: #0284c7; font-weight: 600;">\${suggestion}</td>
                     <td>
                         <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 0ms秒开展开/收起 | 右键: 复制完整 SQL" data-full="\${escapeHtml(fullSql)}" data-brief="\${escapeHtml(briefSql)}">\${escapeHtml(briefSql)}</div>
+                    </td>
+                    <td>
+                        <button class="btn-view-calls" onclick="jumpToDetail('\${escapeJs(fullSql)}')">🔍 查看调用</button>
                     </td>
                 </tr>
             \`;
