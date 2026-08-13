@@ -861,13 +861,18 @@ function getDashboardHtml() {
             const fullSql = currentRightClickedDiv.getAttribute('data-full') || '';
 
             if (action === 'copy-full') {
-                navigator.clipboard.writeText(fullSql).then(() => {
-                    showToast('📋 已成功复制完整 SQL 至剪贴板！');
-                }).catch(() => {
-                    showToast('复制失败');
-                });
+                copySqlText(fullSql);
             }
             hideContextMenu();
+        }
+
+        function copySqlText(text) {
+            if (!text) return;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('📋 已成功复制完整 SQL 至剪贴板！');
+            }).catch(() => {
+                showToast('复制失败');
+            });
         }
 
         function hideContextMenu() {
@@ -1241,10 +1246,16 @@ function getDashboardHtml() {
                     loadDetailData(p);
                 });
 
-                // 更新头部摘要
+                // 更新头部摘要 (完整条件展示 + 可折叠/可复制 SQL 模板卡片)
                 const header = document.getElementById('detail-header');
                 const briefTemplate = compressSqlColumnsFrontend(currentDetailTemplate);
-                header.innerHTML = \`📊 当前查看 SQL 模板的所有调用明细，共 <b>\${totalDetailCount.toLocaleString()}</b> 次调用<br><code>\${escapeHtml(briefTemplate)}</code>\`;
+                header.innerHTML = \`
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span>🔍 <b>SQL 模板调用明细</b>（过滤条件：<code>sql_template</code> 精准匹配 ｜ 匹配日志调用记录：<b>\${totalDetailCount.toLocaleString()}</b> 条）</span>
+                        <button class="btn" style="padding: 2px 10px; font-size: 11.5px; background: #8b5cf6;" onclick="copySqlText('\${escapeJs(currentDetailTemplate)}')">📋 复制完整 SQL 模板</button>
+                    </div>
+                    <div class="sql-code" onclick="handleSqlClick(this)" oncontextmenu="handleSqlContextMenu(event, this)" title="左键: 展开/收起 | 右键: 复制完整 SQL 模板" data-full="\${escapeHtml(currentDetailTemplate)}" data-brief="\${escapeHtml(briefTemplate)}">\${escapeHtml(briefTemplate)}</div>
+                \`;
             }
         }
 
