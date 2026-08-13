@@ -1181,8 +1181,8 @@ function getDashboardHtml() {
             curDiagnosePage = page;
             const traceEl = document.getElementById('trace-diagnose');
             const traceId = traceEl ? traceEl.value.trim() : '';
-            const repeatEl = document.getElementById('sel-min-repeat');
-            const minRepeat = repeatEl ? repeatEl.value : '5';
+            const repeatEl = document.getElementById('inp-min-repeat');
+            const minRepeat = repeatEl ? (parseInt(repeatEl.value, 10) || 5) : 5;
 
             try {
                 const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}&minRepeatCount=\${minRepeat}\`);
@@ -1205,7 +1205,9 @@ function getDashboardHtml() {
         function renderDiagnoseTable(data) {
             const tbody = document.getElementById('diagnose-tbody');
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= 5 的 N+1 循环问题</td></tr>';
+                const repeatEl = document.getElementById('inp-min-repeat');
+                const minVal = repeatEl ? (parseInt(repeatEl.value, 10) || 5) : 5;
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-green);">🎉 优秀！未检测到符合条件的同一事务连接 (dbManager 句柄) 内重复执行次数 >= ' + minVal + ' 次的 N+1 循环问题</td></tr>';
                 return;
             }
             const offset = (curDiagnosePage - 1) * curDiagnosePageSize;
