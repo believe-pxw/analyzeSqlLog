@@ -206,6 +206,7 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 **前端关键交互：**
 - 频次榜/诊断面板「🔍 查看调用」→ `jumpToDetail(sqlTemplate, contextInfo)` → 携带来源、TraceID、dbManager 事务句柄 Hash、循环/执行次数等完整上下文参数跳转到 `detail` Tab 并显示
 - 明细头部（.detail-header）：完整呈现过滤上下文标签（TraceID 支持直接点击跳转到 Trace 面板，显示 dbManager 事务句柄 Hash 及循环次数）
+- Trace 链路分析：默认每页 50 条，同样接入全系统一的标准分页 UI，翻页自动平滑回归第一条
 - VSCode 跳转：`buildVscodeLink(sourceFile, lineNumber)` → `vscode://file/` 协议
 - .gz 文件跳转：先调 `/api/decompress-gz` 解压 → 再用 `vscode://file/` 打开解压后文件
 - SQL 展开/收起：左键点击切换 `data-brief` / `data-full`（表格与明细头部 SQL 卡片均支持）
