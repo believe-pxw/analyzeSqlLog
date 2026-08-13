@@ -204,10 +204,10 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 | `overview` | 📈 概览统计分析 | 统计卡片（总数/模板数/最大耗时等） |
 
 **前端关键交互：**
-- 频次榜/诊断面板「🔍 查看调用」→ `jumpToDetail(sqlTemplate, contextInfo)` → 携带来源、TraceID、dbManager 事务句柄 Hash、循环/执行次数等完整上下文参数跳转到 `detail` Tab 并显示（使用 `skipAutoLoad` 标记消除双重请求与抖动）
+- 频次榜/诊断面板「🔍 查看调用」→ `jumpToDetail(sqlTemplate, contextInfo)` → 携带来源、TraceID、dbManager 事务句柄 Hash、循环/执行次数等完整上下文参数跳转到 `detail` Tab 并显示（使用 `skipAutoLoad` 标记消除双重请求与抖动，不强制修改用户当前视口滚动位置）
 - 明细头部（.detail-header）：完整呈现过滤上下文标签（TraceID 支持直接点击跳转到 Trace 面板，显示 dbManager 事务句柄 Hash 及循环次数）
-- Trace 链路分析：默认每页 50 条，同样接入全系统一的标准分页 UI，翻页/跨面板跳转自动平滑回归第一条
-- 消除跳转抖动：`.table-container` 设为 `min-height: 360px` 稳定框架高度，跨面板按钮跳转时使用 `switchTab(name, true)` 杜绝双重并发重绘抖动
+- Trace 链路分析：默认每页 50 条，同样接入全系统一的标准分页 UI
+- 消除跳转抖动：CSS `html { overflow-y: scroll; }` 锁死纵向滚动条槽位；`.table-container` 设为 `min-height: 360px` 稳定框架高度；跨面板按钮跳转使用 `switchTab(name, true)` 且不强制触置顶滚动，保持当前 Viewport 绝对平稳不晃动
 - .gz 文件跳转：先调 `/api/decompress-gz` 解压 → 再用 `vscode://file/` 打开解压后文件
 - SQL 展开/收起：左键点击切换 `data-brief` / `data-full`（表格与明细头部 SQL 卡片均支持）
 - SQL 右键复制：自定义 Context Menu → 复制到剪贴板（包含明细头部右上角`📋 复制完整 SQL 模板`按钮）
