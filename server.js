@@ -279,17 +279,17 @@ function getDashboardHtml() {
         }
         .tab-btn {
             background: transparent;
-            border: none;
+            border: 1px solid transparent;
             color: var(--text-muted);
-            padding: 6px 14px;
+            padding: 5px 13px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
             font-weight: 600;
-            transition: all 0.15s;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
         .tab-btn:hover { color: var(--accent); background: #f1f5f9; }
-        .tab-btn.active { color: var(--accent); background: #e0f2fe; border: 1px solid #bae6fd; }
+        .tab-btn.active { color: var(--accent); background: #e0f2fe; border-color: #bae6fd; }
 
         .panel { display: none; }
         .panel.active { display: block; }
