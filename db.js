@@ -21,6 +21,7 @@ class SqlLogDatabase {
         this.db = new duckdb.Database(dbPath);
         this.conn = this.db.connect();
         this.insertChain = Promise.resolve();
+        this._lastId = 0;
     }
 
     /**
@@ -85,17 +86,17 @@ class SqlLogDatabase {
         const tmpPath = path.join(os.tmpdir(), `sqllog_batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.json`);
         try {
             const normalized = records.map(r => ({
-                id: r.id,
+                id: (r.id !== undefined && r.id !== null) ? Number(r.id) : ++this._lastId,
                 log_time: r.log_time || '',
                 trace_id: r.trace_id || '-',
                 thread_name: r.thread_name || '-',
-                exec_time_ms: r.exec_time_ms || 0,
-                result_rows: r.result_rows || 0,
+                exec_time_ms: Number(r.exec_time_ms) || 0,
+                result_rows: Number(r.result_rows) || 0,
                 db_manager: r.db_manager || '',
                 sql_template: r.sql_template || '',
                 sql_params: r.sql_params || '',
                 full_sql: r.full_sql || '',
-                line_number: r.line_number || 0,
+                line_number: Number(r.line_number) || 0,
                 source_file: r.source_file || ''
             }));
             fs.writeFileSync(tmpPath, JSON.stringify(normalized));
@@ -173,7 +174,7 @@ class SqlLogDatabase {
     }
 
     /**
-     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、最小耗时阈值过滤、全库关键词搜索)
+     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、最小耗时阈值过滤、全库关键词搜索，附带总耗时统计)
      */
     async getTopSlow(page = 1, pageSize = 20, traceId = '', minCostMs = 0, keyword = '') {
         let whereClause = 'WHERE 1=1';
@@ -194,9 +195,17 @@ class SqlLogDatabase {
             params.push(`%${keyword}%`, `%${keyword}%`);
         }
 
-        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
-        const countRows = await this.query(countSql, params);
-        const total = countRows[0] ? Number(countRows[0].total) : 0;
+        const statSql = `
+            SELECT 
+                COUNT(*) as total,
+                COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(exec_time_ms), 0) as max_cost_ms
+            FROM sqllogs ${whereClause}
+        `;
+        const statRows = await this.query(statSql, params);
+        const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -207,14 +216,14 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, page, pageSize };
+        return { rows, total, totalCostMs, maxCostMs, page, pageSize };
     }
 
     /**
-     * 🔗 按 TraceID 获取该动作下的全量 SQL 按时间顺序排列 (支持后端分页，默认大页面)
+     * 🔗 按 TraceID 获取该动作下的全量 SQL 按时间顺序排列 (支持后端分页，默认大页面，附带总耗时统计)
      */
     async getByTraceId(traceId, page = null, pageSize = 200) {
-        if (!traceId) return page !== null ? { rows: [], total: 0, page: 1, pageSize } : [];
+        if (!traceId) return page !== null ? { rows: [], total: 0, totalCostMs: 0, avgCostMs: 0, page: 1, pageSize } : [];
 
         const whereClause = 'WHERE trace_id = ?';
         const params = [traceId];
@@ -229,9 +238,17 @@ class SqlLogDatabase {
             return await this.query(sql, params);
         }
 
-        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
-        const countRows = await this.query(countSql, params);
-        const total = countRows[0] ? Number(countRows[0].total) : 0;
+        const statSql = `
+            SELECT 
+                COUNT(*) as total,
+                COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(ROUND(AVG(exec_time_ms), 2), 0) as avg_cost_ms
+            FROM sqllogs ${whereClause}
+        `;
+        const statRows = await this.query(statSql, params);
+        const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const avgCostMs = statRows[0] ? Number(statRows[0].avg_cost_ms) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -242,21 +259,39 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, page, pageSize };
+        return { rows, total, totalCostMs, avgCostMs, page, pageSize };
     }
 
     /**
-     * 📋 按 SQL 模板精确查询所有调用明细 (支持分页)
+     * 📋 按 SQL 模板查询调用明细 (支持后端分页、traceId 与 dbManager 精准过滤、总耗时统计)
      */
-    async getByTemplate(sqlTemplate, page = 1, pageSize = 50) {
-        if (!sqlTemplate) return { rows: [], total: 0, page: 1, pageSize };
+    async getByTemplate(sqlTemplate, page = 1, pageSize = 50, traceId = '', dbManager = '') {
+        if (!sqlTemplate) return { rows: [], total: 0, totalCostMs: 0, avgCostMs: 0, page: 1, pageSize };
 
-        const whereClause = 'WHERE sql_template = ?';
+        let whereClause = 'WHERE sql_template = ?';
         const params = [sqlTemplate];
 
-        const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
-        const countRows = await this.query(countSql, params);
-        const total = countRows[0] ? Number(countRows[0].total) : 0;
+        if (traceId) {
+            whereClause += ' AND trace_id = ?';
+            params.push(traceId);
+        }
+
+        if (dbManager) {
+            whereClause += ' AND db_manager = ?';
+            params.push(dbManager);
+        }
+
+        const statSql = `
+            SELECT 
+                COUNT(*) as total,
+                COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(ROUND(AVG(exec_time_ms), 2), 0) as avg_cost_ms
+            FROM sqllogs ${whereClause}
+        `;
+        const statRows = await this.query(statSql, params);
+        const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const avgCostMs = statRows[0] ? Number(statRows[0].avg_cost_ms) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -269,7 +304,64 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, page, pageSize };
+        return { rows, total, totalCostMs, avgCostMs, page, pageSize };
+    }
+
+    /**
+     * 🌐 Trace 动作聚合大盘 (按 trace_id 分组统计 SQL 总数、总耗时、平均耗时、涉及事务数)
+     */
+    async getTraceSummaryList(page = 1, pageSize = 20, keyword = '', minCostMs = 0) {
+        let whereClause = "WHERE trace_id != '-'";
+        const params = [];
+
+        if (keyword) {
+            whereClause += ' AND trace_id ILIKE ?';
+            params.push(`%${keyword}%`);
+        }
+
+        let havingClause = '';
+        const havingParams = [];
+        if (minCostMs > 0) {
+            havingClause = 'HAVING SUM(exec_time_ms) >= ?';
+            havingParams.push(minCostMs);
+        }
+
+        const countSql = `
+            SELECT COUNT(*) as total FROM (
+                SELECT 1 FROM sqllogs ${whereClause} GROUP BY trace_id ${havingClause}
+            )
+        `;
+        const countRows = await this.query(countSql, [...params, ...havingParams]);
+        const total = countRows[0] ? Number(countRows[0].total) : 0;
+
+        const offset = (page - 1) * pageSize;
+        const dataSql = `
+            SELECT 
+                trace_id,
+                COUNT(*) as sql_count,
+                SUM(exec_time_ms) as total_time_ms,
+                ROUND(AVG(exec_time_ms), 2) as avg_time_ms,
+                MAX(exec_time_ms) as max_time_ms,
+                MIN(log_time) as start_time,
+                MAX(log_time) as end_time,
+                COUNT(DISTINCT db_manager) as tx_count
+            FROM sqllogs
+            ${whereClause}
+            GROUP BY trace_id
+            ${havingClause}
+            ORDER BY total_time_ms DESC, sql_count DESC
+            LIMIT ? OFFSET ?
+        `;
+        const rows = await this.query(dataSql, [...params, ...havingParams, pageSize, offset]);
+        const mappedRows = rows.map(r => ({
+            ...r,
+            sql_count: Number(r.sql_count || 0),
+            total_time_ms: Number(r.total_time_ms || 0),
+            avg_time_ms: Number(r.avg_time_ms || 0),
+            max_time_ms: Number(r.max_time_ms || 0),
+            tx_count: Number(r.tx_count || 0)
+        }));
+        return { rows: mappedRows, total, page, pageSize };
     }
 
     /**

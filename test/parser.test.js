@@ -658,7 +658,7 @@ test('24. 独立新增测试：校验 server.js 渲染出的前端 HTML 页面�
     assert.ok(html.includes('id="panel-trace"'), '应包含 panel-trace 面板');
     assert.ok(html.includes('id="panel-repeated"'), '应包含 panel-repeated 面板');
     assert.ok(html.includes('id="panel-detail"'), '应包含 panel-detail 面板');
-    assert.ok(html.includes('id="panel-overview"'), '应包含 panel-overview 面板');
+    assert.ok(html.includes('id="panel-trace-summary"'), '应包含 panel-trace-summary 面板');
 
     // 校验 HTML 中 <table> 与 </table> 标签 100% 闭合对称
     const openTables = (html.match(/<table\b/g) || []).length;
@@ -704,6 +704,7 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         const htmlText = await resHome.text();
         assert.ok(htmlText.includes('SQL 日志分析器'), '主页应包含标题');
         assert.ok(htmlText.includes('panel-repeated'), '主页应包含频次榜面板');
+        assert.ok(htmlText.includes('panel-trace-summary'), '主页应包含 Trace 聚合大盘面板');
 
         // 校验 2: GET /api/summary 概览接口
         const resSummary = await fetch(`${baseUrl}/api/summary`);
@@ -727,6 +728,8 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         assert.strictEqual(jsonSlow.success, true);
         assert.ok(jsonSlow.total > 0, `慢 SQL 排行总数应大于 0, 实际: ${jsonSlow.total}`);
         assert.ok(jsonSlow.data.length > 0, `慢 SQL 第一页应有数据记录, 实际: ${jsonSlow.data.length}`);
+        assert.ok(jsonSlow.totalCostMs > 0, '慢 SQL 接口应返回 totalCostMs');
+        assert.ok(jsonSlow.maxCostMs > 0, '慢 SQL 接口应返回 maxCostMs');
 
         // 校验 5: GET /api/diagnostics N+1 循环诊断接口
         const resDiag = await fetch(`${baseUrl}/api/diagnostics?page=1&pageSize=20`);
@@ -743,6 +746,7 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         assert.ok(jsonDetail.data.length > 0, `SQL 明细第一页应有数据, 实际: ${jsonDetail.data.length}`);
         assert.ok(jsonDetail.data[0].source_file, '明细数据应包含 source_file 绝对路径');
         assert.ok(jsonDetail.data[0].line_number > 0, '明细数据应包含有效 line_number 行号');
+        assert.ok(jsonDetail.totalCostMs !== undefined, '明细接口应返回 totalCostMs');
 
         // 校验 7: GET /api/trace Trace 链路分析接口 (断言有真实数据出来!)
         const sampleTraceId = jsonDetail.data[0].trace_id;
@@ -752,9 +756,19 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
             assert.strictEqual(jsonTrace.success, true);
             assert.ok(jsonTrace.total > 0, `Trace 链路总数应大于 0, 实际: ${jsonTrace.total}`);
             assert.ok(jsonTrace.data.length > 0, `Trace 链路列表应有数据, 实际: ${jsonTrace.data.length}`);
+            assert.ok(jsonTrace.totalCostMs !== undefined, 'Trace 链路应返回 totalCostMs');
         }
 
-        // 校验 8: GET /api/decompress-gz 压缩包解压接口
+        // 校验 8: GET /api/trace-summary-list Trace 聚合大盘接口
+        const resTraceSum = await fetch(`${baseUrl}/api/trace-summary-list?page=1&pageSize=20`);
+        const jsonTraceSum = await resTraceSum.json();
+        assert.strictEqual(jsonTraceSum.success, true);
+        assert.ok(jsonTraceSum.total > 0, `Trace 聚合大盘总数应大于 0, 实际: ${jsonTraceSum.total}`);
+        assert.ok(jsonTraceSum.data.length > 0, `Trace 聚合大盘应有数据, 实际: ${jsonTraceSum.data.length}`);
+        assert.ok(jsonTraceSum.data[0].sql_count > 0, 'Trace 聚合记录应包含 sql_count');
+        assert.ok(jsonTraceSum.data[0].total_time_ms >= 0, 'Trace 聚合记录应包含 total_time_ms');
+
+        // 校验 9: GET /api/decompress-gz 压缩包解压接口
         const gzFixture = path.join(fixturesDir, 'sample-server-info.log.gz');
         if (fs.existsSync(gzFixture)) {
             const resGz = await fetch(`${baseUrl}/api/decompress-gz?filePath=${encodeURIComponent(gzFixture)}`);
@@ -763,29 +777,35 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
             assert.ok(jsonGz.decompressedPath && fs.existsSync(jsonGz.decompressedPath), '解压后文件应真实存在');
         }
 
-        // 校验 9: 前端 DOM 页面渲染全覆盖断言测试 (模拟真实 DOM 环境调用前端 render 函数)
+        // 校验 10: 前端 DOM 页面渲染全覆盖断言测试 (模拟真实 DOM 环境调用前端 render 函数)
         const mockDomMap = {
             'repeated-tbody': { innerHTML: '' },
             'slow-tbody': { innerHTML: '' },
             'diagnose-tbody': { innerHTML: '' },
             'detail-tbody': { innerHTML: '' },
             'trace-tbody': { innerHTML: '' },
+            'trace-summary-tbody': { innerHTML: '' },
+            'trace-summary-stat': { innerText: '' },
             'detail-header': { innerHTML: '' },
             'trace-summary': { innerText: '' },
+            'slow-summary': { innerText: '' },
             'trace-input': { value: sampleTraceId || 'test-trace' },
-            'trace-repeated': { value: '' },
+            'trace-diagnose': { value: '' },
             'trace-slow': { value: '' },
             'inp-min-repeat': { value: '5' },
             'inp-min-cost': { value: '0' },
+            'inp-trace-min-cost': { value: '0' },
             'search-repeated': { value: '' },
             'search-slow': { value: '' },
             'search-diagnose': { value: '' },
+            'search-trace-summary': { value: '' },
             'search-trace-sql': { value: '' },
             'repeated-pagination': { innerHTML: '' },
             'slow-pagination': { innerHTML: '' },
             'diagnose-pagination': { innerHTML: '' },
             'detail-pagination': { innerHTML: '' },
-            'trace-pagination': { innerHTML: '' }
+            'trace-pagination': { innerHTML: '' },
+            'trace-summary-pagination': { innerHTML: '' }
         };
 
         const mockDocument = {
@@ -913,6 +933,184 @@ test('26. 独立新增测试：以真实 DuckDB 数据库为标准，验证 SELE
         if (fs.existsSync(tmpLogDir)) fs.rmdirSync(tmpLogDir);
     }
 });
+
+test('27. 独立新增测试：验证 getByTemplate 与 /api/by-template 支持 traceId + dbManager 精准联合过滤及总耗时统计', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    // 构造跨 Trace、跨 dbManager 的同名 SQL 模板记录
+    const records = [
+        {
+            log_time: '2026-08-13 10:00:00.000',
+            trace_id: 'Trace_A',
+            db_manager: 'MySqlDBManager@11111111',
+            exec_time_ms: 10,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM users WHERE id = ?',
+            full_sql: 'SELECT * FROM users WHERE id = 1',
+            source_file: '/app/logs/server-info.log',
+            line_number: 100
+        },
+        {
+            log_time: '2026-08-13 10:00:01.000',
+            trace_id: 'Trace_A',
+            db_manager: 'MySqlDBManager@11111111',
+            exec_time_ms: 20,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM users WHERE id = ?',
+            full_sql: 'SELECT * FROM users WHERE id = 2',
+            source_file: '/app/logs/server-info.log',
+            line_number: 110
+        },
+        {
+            log_time: '2026-08-13 10:00:02.000',
+            trace_id: 'Trace_A',
+            db_manager: 'MySqlDBManager@22222222', // 同 Trace 不同 dbManager 句柄
+            exec_time_ms: 30,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM users WHERE id = ?',
+            full_sql: 'SELECT * FROM users WHERE id = 3',
+            source_file: '/app/logs/server-info.log',
+            line_number: 120
+        },
+        {
+            log_time: '2026-08-13 10:00:03.000',
+            trace_id: 'Trace_B', // 不同 Trace
+            db_manager: 'MySqlDBManager@11111111',
+            exec_time_ms: 40,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM users WHERE id = ?',
+            full_sql: 'SELECT * FROM users WHERE id = 4',
+            source_file: '/app/logs/server-info.log',
+            line_number: 130
+        }
+    ];
+
+    await testDb.insertBatch(records);
+
+    try {
+        // 1. 无过滤：全库查询该模板
+        const allRes = await testDb.getByTemplate('SELECT * FROM users WHERE id = ?', 1, 50);
+        assert.strictEqual(allRes.total, 4, '无过滤时应查到全库 4 条调用');
+        assert.strictEqual(allRes.totalCostMs, 100, '总耗时应为 10+20+30+40=100ms');
+        assert.strictEqual(allRes.avgCostMs, 25, '平均耗时应为 25ms');
+
+        // 2. 精准过滤：指定 traceId="Trace_A" + dbManager="MySqlDBManager@11111111"
+        const filteredRes = await testDb.getByTemplate('SELECT * FROM users WHERE id = ?', 1, 50, 'Trace_A', 'MySqlDBManager@11111111');
+        assert.strictEqual(filteredRes.total, 2, '精准过滤后必须精确为该事务连接内的 2 条记录');
+        assert.strictEqual(filteredRes.rows.length, 2);
+        assert.strictEqual(filteredRes.totalCostMs, 30, '过滤后总耗时应为 10+20=30ms');
+        assert.strictEqual(filteredRes.avgCostMs, 15, '过滤后平均耗时应为 15ms');
+        assert.strictEqual(filteredRes.rows[0].full_sql, 'SELECT * FROM users WHERE id = 1');
+        assert.strictEqual(filteredRes.rows[1].full_sql, 'SELECT * FROM users WHERE id = 2');
+
+        // 3. HTTP API 层验证
+        const server = createServer(testDb, null, 0);
+        const port = server.address().port;
+        const apiUrl = `http://127.0.0.1:${port}/api/by-template?sqlTemplate=${encodeURIComponent('SELECT * FROM users WHERE id = ?')}&traceId=Trace_A&dbManager=${encodeURIComponent('MySqlDBManager@11111111')}`;
+        
+        const httpRes = await fetch(apiUrl);
+        const json = await httpRes.json();
+        assert.strictEqual(json.success, true);
+        assert.strictEqual(json.total, 2);
+        assert.strictEqual(json.totalCostMs, 30);
+        assert.strictEqual(json.avgCostMs, 15);
+        assert.strictEqual(json.data.length, 2);
+
+        server.close();
+    } finally {
+        await testDb.close();
+    }
+});
+
+test('28. 独立新增测试：验证 getTraceSummaryList 与 /api/trace-summary-list 按 TraceID 聚合分组大盘与多维过滤', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    const records = [
+        // Trace_1: 3条 SQL，总耗时 150ms，2 个连接句柄
+        { log_time: '2026-08-13 12:00:00.000', trace_id: 'Trace_Alpha', db_manager: 'DBMgr@A1', exec_time_ms: 50, result_rows: 1, sql_template: 'SELECT 1', full_sql: 'SELECT 1', source_file: 'f.log', line_number: 1 },
+        { log_time: '2026-08-13 12:00:01.000', trace_id: 'Trace_Alpha', db_manager: 'DBMgr@A1', exec_time_ms: 30, result_rows: 1, sql_template: 'SELECT 2', full_sql: 'SELECT 2', source_file: 'f.log', line_number: 2 },
+        { log_time: '2026-08-13 12:00:02.000', trace_id: 'Trace_Alpha', db_manager: 'DBMgr@A2', exec_time_ms: 70, result_rows: 1, sql_template: 'SELECT 3', full_sql: 'SELECT 3', source_file: 'f.log', line_number: 3 },
+        // Trace_2: 1条 SQL，总耗时 20ms，1 个连接句柄
+        { log_time: '2026-08-13 13:00:00.000', trace_id: 'Trace_Beta', db_manager: 'DBMgr@B1', exec_time_ms: 20, result_rows: 1, sql_template: 'SELECT 4', full_sql: 'SELECT 4', source_file: 'f.log', line_number: 4 },
+        // 无效 Trace: '-' 应被自动排除
+        { log_time: '2026-08-13 14:00:00.000', trace_id: '-', db_manager: 'DBMgr@None', exec_time_ms: 10, result_rows: 1, sql_template: 'SELECT 5', full_sql: 'SELECT 5', source_file: 'f.log', line_number: 5 }
+    ];
+
+    await testDb.insertBatch(records);
+
+    try {
+        // 1. 全量大盘聚合查询
+        const sumList = await testDb.getTraceSummaryList(1, 20);
+        assert.strictEqual(sumList.total, 2, '有效 Trace 总数应为 2 (排除 -)');
+        assert.strictEqual(sumList.rows.length, 2);
+
+        // 验证第一条 (Trace_Alpha 耗时 150ms 排名第一)
+        const alpha = sumList.rows[0];
+        assert.strictEqual(alpha.trace_id, 'Trace_Alpha');
+        assert.strictEqual(alpha.sql_count, 3);
+        assert.strictEqual(alpha.total_time_ms, 150);
+        assert.strictEqual(alpha.avg_time_ms, 50);
+        assert.strictEqual(alpha.max_time_ms, 70);
+        assert.strictEqual(alpha.tx_count, 2, '独立连接句柄数应为 2');
+        assert.ok(alpha.start_time.startsWith('2026-08-13 12:00:00'), '首条执行时间应正确');
+
+        // 2. 最小总耗时过滤 (minCostMs >= 50)
+        const filteredCost = await testDb.getTraceSummaryList(1, 20, '', 50);
+        assert.strictEqual(filteredCost.total, 1, '耗时>=50ms 的 Trace 只有 Trace_Alpha');
+        assert.strictEqual(filteredCost.rows[0].trace_id, 'Trace_Alpha');
+
+        // 3. 关键字过滤 (keyword="Beta")
+        const filteredKw = await testDb.getTraceSummaryList(1, 20, 'Beta', 0);
+        assert.strictEqual(filteredKw.total, 1);
+        assert.strictEqual(filteredKw.rows[0].trace_id, 'Trace_Beta');
+
+        // 4. HTTP API 层验证
+        const server = createServer(testDb, null, 0);
+        const port = server.address().port;
+        const res = await fetch(`http://127.0.0.1:${port}/api/trace-summary-list?page=1&pageSize=10&keyword=Alpha`);
+        const json = await res.json();
+        assert.strictEqual(json.success, true);
+        assert.strictEqual(json.total, 1);
+        assert.strictEqual(json.data[0].trace_id, 'Trace_Alpha');
+        assert.strictEqual(json.data[0].total_time_ms, 150);
+
+        server.close();
+    } finally {
+        await testDb.close();
+    }
+});
+
+test('29. 独立新增测试：验证慢 SQL 排行与 Trace 链路分析总耗时大盘统计度量', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    const records = [
+        { log_time: '2026-08-13 15:00:00.000', trace_id: 'Trace_X', db_manager: 'DBMgr@1', exec_time_ms: 120, result_rows: 10, sql_template: 'SELECT 1', full_sql: 'SELECT 1', source_file: 'f.log', line_number: 1 },
+        { log_time: '2026-08-13 15:00:01.000', trace_id: 'Trace_X', db_manager: 'DBMgr@1', exec_time_ms: 80, result_rows: 5, sql_template: 'SELECT 2', full_sql: 'SELECT 2', source_file: 'f.log', line_number: 2 },
+        { log_time: '2026-08-13 15:00:02.000', trace_id: 'Trace_Y', db_manager: 'DBMgr@2', exec_time_ms: 40, result_rows: 1, sql_template: 'SELECT 3', full_sql: 'SELECT 3', source_file: 'f.log', line_number: 3 }
+    ];
+
+    await testDb.insertBatch(records);
+
+    try {
+        // 1. 慢 SQL 总耗时统计度量
+        const slowRes = await testDb.getTopSlow(1, 20, '', 50); // 耗时>=50ms
+        assert.strictEqual(slowRes.total, 2);
+        assert.strictEqual(slowRes.totalCostMs, 200, '慢 SQL 累计耗时应为 120+80=200ms');
+        assert.strictEqual(slowRes.maxCostMs, 120, '慢 SQL 最高耗时应为 120ms');
+
+        // 2. Trace 链路总耗时与平均耗时统计度量
+        const traceRes = await testDb.getByTraceId('Trace_X', 1, 50);
+        assert.strictEqual(traceRes.total, 2);
+        assert.strictEqual(traceRes.totalCostMs, 200, 'Trace_X 累计总耗时应为 200ms');
+        assert.strictEqual(traceRes.avgCostMs, 100, 'Trace_X 平均耗时应为 100ms');
+    } finally {
+        await testDb.close();
+    }
+});
+
 
 
 
