@@ -81,12 +81,44 @@ function cleanSqlText(text) {
 }
 
 /**
- * 极速流式日志解析器
- * @param {string} filePath - 日志文件路径
- * @param {function} onRecord - 每解析完一条 SQL 结构化记录时的回调函数
- * @returns {Promise<{totalLines: number, totalRecords: number}>}
+ * 解析 ActionRecorder 格式单行
  */
-async function parseLogFile(filePath, onRecord, startRecordId = 0) {
+function parseActionLine(line) {
+    const cleanLine = line.startsWith('>') ? line.substring(1) : line;
+    const parts = cleanLine.split('\t');
+    if (parts.length < 5) return null;
+
+    const rawLevel = parts[0];
+    const level = parseInt(rawLevel.trim(), 10);
+    if (isNaN(level)) return null;
+
+    const timeUs = parseFloat(parts[1]) || 0;
+    const selfTimeUs = parseFloat(parts[2]) || 0;
+    const gapTimeUs = parseFloat(parts[3]) || 0;
+    const actionName = parts.slice(4).join('\t').trim();
+
+    return {
+        level,
+        time_us: timeUs,
+        self_time_us: selfTimeUs,
+        gap_time_us: gapTimeUs,
+        time_ms: Math.round(timeUs / 10) / 100,
+        self_time_ms: Math.round(selfTimeUs / 10) / 100,
+        gap_time_ms: Math.round(gapTimeUs / 10) / 100,
+        action_name: actionName,
+        sql_text: ''
+    };
+}
+
+/**
+ * 极速流式日志解析器 (同时支持 SQL 日志与 ActionRecorder 性能日志)
+ * @param {string} filePath - 日志文件路径
+ * @param {function} onRecord - SQL 结构化记录回调函数
+ * @param {number} startRecordId - SQL 记录自增起始 ID
+ * @param {function} onPerfTrace - Performance 树记录回调函数
+ * @returns {Promise<{totalLines: number, totalRecords: number, totalPerfTraces: number}>}
+ */
+async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace = null) {
     let inputStream;
     if (filePath.endsWith('.gz')) {
         const gzStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
@@ -105,10 +137,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
 
     let totalLines = 0;
     let totalRecords = startRecordId;
+    let totalPerfTraces = 0;
 
     let currentRecord = null;
     let captureState = null; // 'sql_template' | 'full_sql' | null
     let lastHeaderInfo = { logTime: '', traceId: '-', threadName: '-' };
+
+    // Performance ActionRecorder 状态机
+    let inPerfBlock = false;
+    let curPerfTraceId = '';
+    let lastPerfAction = null;
+    const perfTracesMap = new Map(); // traceId -> { traceInfo, actions: [] }
 
     async function flushCurrent() {
         if (currentRecord) {
@@ -147,6 +186,28 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
             // 无论任何类名的 Header，都记忆更新最近的 Header 上下文
             lastHeaderInfo = parseLogHeader(line);
 
+            // 判断是否是 ActionRecorder 性能日志
+            if (line.includes('com.bokesoft.erp.performance.ActionRecorder')) {
+                inPerfBlock = true;
+                curPerfTraceId = lastHeaderInfo.traceId;
+                if (!perfTracesMap.has(curPerfTraceId)) {
+                    perfTracesMap.set(curPerfTraceId, {
+                        trace_id: curPerfTraceId,
+                        log_time: lastHeaderInfo.logTime,
+                        thread_name: lastHeaderInfo.threadName,
+                        source_file: path.resolve(filePath),
+                        line_number: totalLines,
+                        actions: []
+                    });
+                }
+                lastPerfAction = null;
+                continue;
+            }
+
+            // 非 ActionRecorder 的日志 Header，结束当前 perfBlock
+            inPerfBlock = false;
+            lastPerfAction = null;
+
             // 判断是否是 SQL 相关的日志 Header
             const isSqlLogHeader = line.includes('PreparedStatementWithLog') || 
                                    line.includes('SQLLogUtils') || 
@@ -173,7 +234,35 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
             continue;
         }
 
-        // 非 Header 行逻辑 (处理如 >SQL执行信息: 等行)
+        // ==================== ActionRecorder 性能日志行解析 ====================
+        if (inPerfBlock) {
+            if (line.includes('================================================================================') ||
+                line.includes('Level\tTime(0.001ms)')) {
+                continue;
+            }
+
+            if (line.startsWith('>')) {
+                const parsedAction = parseActionLine(line);
+                if (parsedAction) {
+                    parsedAction.line_number = totalLines;
+                    parsedAction.source_file = path.resolve(filePath);
+                    const perfEntry = perfTracesMap.get(curPerfTraceId);
+                    if (perfEntry) {
+                        perfEntry.actions.push(parsedAction);
+                    }
+                    lastPerfAction = parsedAction;
+                } else if (lastPerfAction) {
+                    // 多行 SQL 文本追加
+                    const sqlLine = line.startsWith('>') ? line.substring(1).trim() : line.trim();
+                    if (sqlLine) {
+                        lastPerfAction.sql_text += (lastPerfAction.sql_text ? '\n' : '') + sqlLine;
+                    }
+                }
+                continue;
+            }
+        }
+
+        // ==================== SQL 记录行解析 ====================
         if (!currentRecord) {
             if (line.includes('SQL执行信息:')) {
                 currentRecord = {
@@ -294,13 +383,83 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0) {
     }
 
     await flushCurrent();
-    return { totalLines, totalRecords: totalRecords - startRecordId };
+
+    // 结构化整理 Performance Traces
+    if (onPerfTrace && perfTracesMap.size > 0) {
+        for (const [traceId, pTrace] of perfTracesMap.entries()) {
+            const actions = pTrace.actions;
+            if (actions.length === 0) continue;
+
+            const levelStack = [];
+            let totalSqlCount = 0;
+            let totalSqlTimeMs = 0;
+            let totalCommitTimeMs = 0;
+            let totalGapTimeMs = 0;
+            let maxDepth = 0;
+
+            actions.forEach((a, idx) => {
+                a.node_id = idx;
+                if (a.level > maxDepth) maxDepth = a.level;
+
+                levelStack[a.level] = idx;
+                a.parent_id = a.level > 0 ? (levelStack[a.level - 1] ?? -1) : -1;
+
+                totalGapTimeMs += a.gap_time_ms;
+
+                if (a.action_name.startsWith('QueryDatabase/')) {
+                    totalSqlCount++;
+                    totalSqlTimeMs += a.time_ms;
+                    a.action_category = 'sql';
+                } else if (a.action_name === 'DB commit' || a.action_name === 'submit') {
+                    totalCommitTimeMs += a.time_ms;
+                    a.action_category = 'commit';
+                } else {
+                    a.action_category = 'biz';
+                }
+            });
+
+            const rootAction = actions.find(a => a.level === 0) || actions[0];
+            const firstService = actions.find(a => a.level === 1) || { action_name: '-' };
+
+            const totalTimeMs = rootAction ? rootAction.time_ms : 0;
+            const selfTimeMs = rootAction ? rootAction.self_time_ms : 0;
+            const bizTimeMs = Math.max(0, Math.round((totalTimeMs - totalSqlTimeMs - totalCommitTimeMs) * 100) / 100);
+
+            const traceSummary = {
+                id: 0,
+                trace_id: traceId,
+                log_time: pTrace.log_time,
+                thread_name: pTrace.thread_name,
+                root_action: rootAction ? rootAction.action_name : 'MidVEFilter.doFilter',
+                service_name: firstService ? firstService.action_name : '-',
+                total_time_ms: totalTimeMs,
+                self_time_ms: selfTimeMs,
+                gap_time_ms: Math.round(totalGapTimeMs * 100) / 100,
+                biz_time_ms: bizTimeMs,
+                sql_time_ms: Math.round(totalSqlTimeMs * 100) / 100,
+                commit_time_ms: Math.round(totalCommitTimeMs * 100) / 100,
+                action_count: actions.length,
+                sql_count: totalSqlCount,
+                max_depth: maxDepth,
+                source_file: pTrace.source_file,
+                line_number: pTrace.line_number
+            };
+
+            totalPerfTraces++;
+            const res = onPerfTrace({ trace: traceSummary, actions });
+            if (res && typeof res.then === 'function') {
+                await res;
+            }
+        }
+    }
+
+    return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces };
 }
 
 /**
  * 遍历扫描指定目录/文件列表 (支持多核 Worker 线程池并行深度扫描)
  */
-async function parseLogs(targetPath, onRecord) {
+async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
     let files = [];
 
     function collectFiles(dirOrFilePath) {
@@ -308,7 +467,7 @@ async function parseLogs(targetPath, onRecord) {
         if (stat.isDirectory()) {
             const entries = fs.readdirSync(dirOrFilePath, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.name.startsWith('.')) continue; // 忽略隐藏文件/目录
+                if (entry.name.startsWith('.')) continue;
                 const fullPath = path.join(dirOrFilePath, entry.name);
                 if (entry.isDirectory()) {
                     collectFiles(fullPath);
@@ -331,7 +490,7 @@ async function parseLogs(targetPath, onRecord) {
     }
 
     if (files.length === 0) {
-        return { totalFiles: 0, totalLines: 0, totalRecords: 0 };
+        return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0 };
     }
 
     // 🚀 极限性能拉满：解锁全 CPU 核心全速并发解析
@@ -342,14 +501,16 @@ async function parseLogs(targetPath, onRecord) {
     if (files.length <= 1 || !isMainThread || maxWorkers <= 1) {
         let grandTotalLines = 0;
         let grandTotalRecords = 0;
+        let grandTotalPerfTraces = 0;
 
         for (const file of files) {
-            const result = await parseLogFile(file, onRecord, grandTotalRecords);
+            const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace);
             grandTotalLines += result.totalLines;
             grandTotalRecords += result.totalRecords;
+            grandTotalPerfTraces += (result.totalPerfTraces || 0);
         }
 
-        return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords };
+        return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords, totalPerfTraces: grandTotalPerfTraces };
     }
 
     // 🚀 多核 Worker 线程池全速分发处理
@@ -358,6 +519,7 @@ async function parseLogs(targetPath, onRecord) {
 
     let grandTotalLines = 0;
     let grandTotalRecords = 0;
+    let grandTotalPerfTraces = 0;
 
     const workerPromises = chunks.map((workerFiles) => {
         return new Promise((resolve, reject) => {
@@ -383,6 +545,16 @@ async function parseLogs(targetPath, onRecord) {
                             }
                         }
                     });
+                } else if (msg.type === 'perf_trace') {
+                    pendingBatchPromise = pendingBatchPromise.then(async () => {
+                        grandTotalPerfTraces++;
+                        if (onPerfTrace) {
+                            const res = onPerfTrace(msg.data);
+                            if (res && typeof res.then === 'function') {
+                                await res;
+                            }
+                        }
+                    });
                 } else if (msg.type === 'done') {
                     grandTotalLines += msg.totalLines;
                     pendingBatchPromise.then(() => resolve()).catch(reject);
@@ -398,7 +570,7 @@ async function parseLogs(targetPath, onRecord) {
 
     await Promise.all(workerPromises);
 
-    return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords };
+    return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords, totalPerfTraces: grandTotalPerfTraces };
 }
 
 // 🚀 Worker 线程独立子进程入口
@@ -406,6 +578,8 @@ if (!isMainThread && workerData && workerData.files) {
     (async () => {
         let totalLines = 0;
         let totalRecords = 0;
+        let totalPerfTraces = 0;
+
         for (const file of workerData.files) {
             let batch = [];
             const result = await parseLogFile(file, async (record) => {
@@ -414,7 +588,9 @@ if (!isMainThread && workerData && workerData.files) {
                     parentPort.postMessage({ type: 'batch', records: batch });
                     batch = [];
                 }
-            }, 0);
+            }, 0, async (perfData) => {
+                parentPort.postMessage({ type: 'perf_trace', data: perfData });
+            });
 
             if (batch.length > 0) {
                 parentPort.postMessage({ type: 'batch', records: batch });
@@ -423,8 +599,9 @@ if (!isMainThread && workerData && workerData.files) {
 
             totalLines += result.totalLines;
             totalRecords += result.totalRecords;
+            totalPerfTraces += (result.totalPerfTraces || 0);
         }
-        parentPort.postMessage({ type: 'done', totalLines, totalRecords });
+        parentPort.postMessage({ type: 'done', totalLines, totalRecords, totalPerfTraces });
     })();
 }
 
@@ -432,5 +609,6 @@ module.exports = {
     parseLogs,
     parseLogFile,
     parseTimeToMs,
-    cleanSqlText
+    cleanSqlText,
+    parseActionLine
 };

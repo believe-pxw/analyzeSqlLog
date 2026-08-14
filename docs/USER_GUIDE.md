@@ -29,11 +29,34 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-## 💡 六大核心功能视图操作详解
+## 💡 七大核心功能视图操作详解
 
 ---
 
-### 🌐 1. Trace 聚合大盘 (全局性能宏观分析)
+### ⚡ 1. 性能链路树 (全链路方法级性能剖析与火焰热点)
+
+#### 核心作用
+基于平台性能分析日志（`com.bokesoft.erp.performance.ActionRecorder`），以请求生命周期（Root 节点 `MidVEFilter.doFilter`）为根，**自顶向下完整构建 Java 业务方法、宏脚本运算、SQL 查询与事务提交的全链路方法调用树**。直观呈现业务耗时与数据库耗时在请求中的分布占比，秒级定位深层计算瓶颈。
+
+#### 关键特性
+1. **第一层核心 Service 业务动作识别**：在请求列表与分析视图中，自动提取第一层业务 Service/Macro 动作（如 `RichDocument/RichDocumentEvalMacro/.../Macro_LoadObject`），直观展示当前请求所承载的具体业务单据或功能。
+2. **四维耗时全景分布条**：在列表中以彩色堆叠进度条直观展示：
+   - 🟪 **Java 业务与宏运算耗时 (`biz_time_ms`)**
+   - 🟦 **数据库 SQL 执行耗时 (`sql_time_ms`)**
+   - 🟩 **事务提交阶段耗时 (`commit_time_ms`)**
+   - ⬜ **线程调度与未覆盖间隙 (`gap_time_ms`)**
+3. **🔥 Top 5 自耗时热点方法归因**：
+   - 自动扣除所有子节点耗时，计算每个方法的**净自耗时 (`self_time_ms`)** 并严格降序排列；
+   - 一键揪出占用 CPU 密集计算、低效循环或线程空转的热点方法。
+4. **可折叠树形调用表格 & SQL 智能关联**：
+   - 支持多层级缩进与 `+/-` 节点交互折叠/展开；
+   - 自动提取并高亮关联 `QueryDatabase/` 下的多行 SQL 查询语句，支持左键展开与右键一键复制；
+   - 提供「➕ 一键展开全部」、「➖ 一键收起全部」与「🔥 仅展开耗时 > 50ms 分支」等高效快捷操作；
+   - 每一个调用动作与 SQL 均支持 **📂 VSCode 源码行号直达**。
+
+---
+
+### 🌐 2. Trace 聚合大盘 (全局性能宏观分析)
 
 ![Trace 聚合大盘](./images/02_trace_summary.png)
 
@@ -50,7 +73,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 🔁 2. 事务内重复 SQL (N+1) 诊断 (独家精准排查)
+### 🔁 3. 事务内重复 SQL (N+1) 诊断 (独家精准排查)
 
 ![事务内重复 SQL 诊断](./images/01_n_plus_one_diagnostics.png)
 
@@ -67,7 +90,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 📊 3. SQL 频次榜 (热点模板收敛)
+### 📊 4. SQL 频次榜 (热点模板收敛)
 
 ![SQL 频次榜](./images/03_sql_frequency_rank.png)
 
@@ -81,7 +104,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 🐢 4. 慢 SQL 排行 (单条耗时瓶颈定位)
+### 🐢 5. 慢 SQL 排行 (单条耗时瓶颈定位)
 
 ![慢 SQL 排行](./images/04_slow_sql_rank.png)
 
@@ -97,7 +120,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 🔗 5. Trace 链路分析 (请求全生命周期还原)
+### 🔗 6. Trace 链路分析 (请求全生命周期还原)
 
 ![Trace 链路分析](./images/05_trace_timeline_analysis.png)
 
@@ -111,7 +134,7 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 ---
 
-### 📋 6. SQL 调用明细 (精准调用实例追踪)
+### 📋 7. SQL 调用明细 (精准调用实例追踪)
 
 ![SQL 调用明细](./images/06_sql_call_detail.png)
 
@@ -131,9 +154,10 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 ## 🎯 典型性能调优实战场景
 
 ### 场景 A：接口响应变慢，如何 30 秒定位瓶颈？
-1. 打开 **🌐 Trace 聚合大盘**，查看排在首位（总耗时最高）的 Trace ID；
-2. 点击该行的 **「🔗 链路」**，观察总耗时是集中在某一条慢 SQL（如耗时 > 3000ms），还是由于执行了数百条 SQL 累计导致；
-3. 如果是数百条重复小 SQL，点击 **「🔁 N+1」** 查看循环次数并获取批量化重构建议。
+1. 打开 **⚡ 性能链路树** 或 **🌐 Trace 聚合大盘**，查看排在首位（总耗时最高）的请求；
+2. 在 **⚡ 性能链路树** 中查看四维耗时分布，秒级判断是 Java 业务耗时还是 SQL 数据库耗时占主导；
+3. 查看 **Top 5 自耗时热点列表** 确定是哪个宏或 Service 自身运算缓慢，点击 VSCode 链接直达源码定位；
+4. 若 SQL 耗时偏高，点击 **「🔗 链路」** 或 **「🔁 N+1」** 查看循环调用并重构。
 
 ### 场景 B：数据库 CPU 占用偏高，如何排查热点模板？
 1. 打开 **📊 SQL 频次榜**，按执行频次降序查看；
@@ -146,4 +170,4 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 
 - **纯内存 DuckDB 向量引擎**：无任何磁盘持久化开销，数据在内存中以 Arrow Multi-row Chunk 向量化装载，毫秒级响应海量查询。
 - **多核 Worker Threads 流式状态机**：多核子线程切块并行解析，支持 270,000+ 行/秒吞吐。
-- **33 项全自动化测试保固**：内置基准性能、解析状态机、DuckDB 查询、HTTP API 与 DOM 渲染全流程 E2E 测试，保障极端场景下的 100% 稳定性。
+- **38 项全自动化测试保固**：内置基准性能、解析状态机、性能剖析树、DuckDB 向量化查询、HTTP API 与 DOM 渲染全流程 E2E 测试，保障极端场景下的 100% 稳定性。

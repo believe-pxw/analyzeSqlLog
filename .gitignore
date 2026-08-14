@@ -1,6 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+!test/fixtures/**
 *.duckdb
 *.duckdb.wal
 .idea/
+

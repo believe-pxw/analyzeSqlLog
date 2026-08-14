@@ -46,18 +46,35 @@ async function main() {
     let batch = [];
     const BATCH_SIZE = 10000;
 
+    let perfBatch = [];
+    const PERF_BATCH_SIZE = 50;
+
     // 流式解析并批量写入 DuckDB (微任务 0 开销优化)
-    const parseResult = await parseLogs(targetPath, (record) => {
-        batch.push(record);
-        if (batch.length >= BATCH_SIZE) {
-            const toInsert = batch;
-            batch = [];
-            return db.insertBatch(toInsert);
+    const parseResult = await parseLogs(
+        targetPath,
+        (record) => {
+            batch.push(record);
+            if (batch.length >= BATCH_SIZE) {
+                const toInsert = batch;
+                batch = [];
+                return db.insertBatch(toInsert);
+            }
+        },
+        (perfData) => {
+            perfBatch.push(perfData);
+            if (perfBatch.length >= PERF_BATCH_SIZE) {
+                const toInsert = perfBatch;
+                perfBatch = [];
+                return db.insertPerfBatch(toInsert);
+            }
         }
-    });
+    );
 
     if (batch.length > 0) {
         await db.insertBatch(batch);
+    }
+    if (perfBatch.length > 0) {
+        await db.insertPerfBatch(perfBatch);
     }
 
     const costMs = Date.now() - startTime;
@@ -69,6 +86,9 @@ async function main() {
     console.log(`• 日志文件数: ${parseResult.totalFiles}`);
     console.log(`• 扫描日志行数: ${parseResult.totalLines.toLocaleString()}`);
     console.log(`• 结构化 SQL 记录: ${parseResult.totalRecords.toLocaleString()} 条`);
+    if (parseResult.totalPerfTraces > 0) {
+        console.log(`• 性能剖析树 (ActionRecorder): ${parseResult.totalPerfTraces.toLocaleString()} 笔完整请求`);
+    }
 
     // 启动 Web 控制台 (端口自动容错递增)
     createServer(db, parseResult, 3000);

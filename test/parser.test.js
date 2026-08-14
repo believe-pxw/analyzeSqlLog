@@ -1202,3 +1202,192 @@ test('30. 独立新增测试：验证 N+1 诊断在过滤 TraceID / 循环次数
         await testDb.close();
     }
 });
+
+test('31. 独立新增测试：parseActionLine 性能动作行解析与单位微秒换算测试', () => {
+    const { parseActionLine } = require('../parser');
+
+    // 格式: >[空格*]Level\tTime(0.001ms)\tSelfTime(0.001ms)\tGapTime(0.001ms)\tAction
+    const line1 = '>0\t69196372\t25262856\t0\tMidVEFilter.doFilter';
+    const res1 = parseActionLine(line1);
+    assert.strictEqual(res1.level, 0);
+    assert.strictEqual(res1.time_us, 69196372);
+    assert.strictEqual(res1.self_time_us, 25262856);
+    assert.strictEqual(res1.gap_time_us, 0);
+    assert.strictEqual(res1.time_ms, 69196.37);
+    assert.strictEqual(res1.self_time_ms, 25262.86);
+    assert.strictEqual(res1.gap_time_ms, 0);
+    assert.strictEqual(res1.action_name, 'MidVEFilter.doFilter');
+
+    const line2 = '> 1\t9729706\t7906867\t747\tloadObject/MM_PurchaseOrder';
+    const res2 = parseActionLine(line2);
+    assert.strictEqual(res2.level, 1);
+    assert.strictEqual(res2.time_us, 9729706);
+    assert.strictEqual(res2.self_time_us, 7906867);
+    assert.strictEqual(res2.gap_time_us, 747);
+    assert.strictEqual(res2.time_ms, 9729.71);
+    assert.strictEqual(res2.self_time_ms, 7906.87);
+    assert.strictEqual(res2.gap_time_ms, 0.75);
+    assert.strictEqual(res2.action_name, 'loadObject/MM_PurchaseOrder');
+
+    // 异常容错测试
+    assert.strictEqual(parseActionLine('>==================='), null);
+    assert.strictEqual(parseActionLine('>Level\tTime(0.001ms)\t...'), null);
+    assert.strictEqual(parseActionLine(''), null);
+});
+
+test('32. 独立新增测试：基于 sample-perf.log 真实日志验证 ActionRecorder 流式解析与多行 SQL 关联及父子关系计算', async () => {
+    const samplePerfLog = path.resolve(__dirname, 'fixtures', 'perf', 'sample-perf.log');
+    assert.ok(fs.existsSync(samplePerfLog), '测试样本 sample-perf.log 必须存在');
+
+    const collectedTraces = [];
+    const parseRes = await parseLogFile(samplePerfLog, () => {}, 0, (perfTrace) => {
+        collectedTraces.push(perfTrace);
+    });
+
+    assert.ok(parseRes.totalPerfTraces > 0, '应成功解析出性能树');
+    assert.strictEqual(collectedTraces.length, 1);
+
+    const { trace, actions } = collectedTraces[0];
+    assert.strictEqual(trace.trace_id, '43tv9pop1703907v2p9dss1-40');
+    assert.strictEqual(trace.root_action, 'MidVEFilter.doFilter');
+    assert.ok(trace.service_name.includes('MM_PurchaseOrder'), '首层 Service 应识别出 MM_PurchaseOrder');
+    assert.strictEqual(trace.total_time_ms, 69196.37);
+    assert.strictEqual(trace.self_time_ms, 25262.86);
+    assert.ok(trace.sql_count > 5000, `SQL 节点数应大于 5000 条, 实际: ${trace.sql_count}`);
+    assert.ok(actions.length > 5100, `总动作节点数应大于 5100, 实际: ${actions.length}`);
+
+    // 验证父子关系树与 SQL 关联
+    const rootNode = actions.find(a => a.level === 0);
+    assert.strictEqual(rootNode.node_id, 0);
+    assert.strictEqual(rootNode.parent_id, -1);
+
+    const level1Nodes = actions.filter(a => a.level === 1);
+    assert.ok(level1Nodes.length > 0);
+    level1Nodes.forEach(n => assert.strictEqual(n.parent_id, 0));
+
+    const sqlNode = actions.find(a => a.action_name.startsWith('QueryDatabase/') && a.sql_text);
+    assert.ok(sqlNode, '应存在包含 sql_text 的 QueryDatabase/ 节点');
+    assert.ok(sqlNode.sql_text.length > 0, 'SQL 文本不为空');
+    assert.strictEqual(sqlNode.action_category, 'sql');
+});
+
+test('33. 独立新增测试：perf_traces 与 perf_actions 在 DuckDB 中的向量化存储与 getPerformanceTraceList 检索过滤', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    const samplePerfLog = path.resolve(__dirname, 'fixtures', 'perf', 'sample-perf.log');
+    const collectedTraces = [];
+    await parseLogFile(samplePerfLog, () => {}, 0, (perfTrace) => {
+        collectedTraces.push(perfTrace);
+    });
+
+    await testDb.insertPerfBatch(collectedTraces);
+
+    try {
+        // 1. 无过滤全量列表
+        const listAll = await testDb.getPerformanceTraceList(1, 20);
+        assert.strictEqual(listAll.total, 1);
+        assert.strictEqual(listAll.rows.length, 1);
+        const row = listAll.rows[0];
+        assert.strictEqual(row.trace_id, '43tv9pop1703907v2p9dss1-40');
+        assert.strictEqual(row.total_time_ms, 69196.37);
+        assert.strictEqual(row.root_action, 'MidVEFilter.doFilter');
+        assert.ok(row.service_name.includes('MM_PurchaseOrder'));
+        assert.ok(row.action_count > 5000);
+        assert.ok(row.sql_count > 5000);
+
+        // 2. 耗时阈值过滤
+        const listCostFilter = await testDb.getPerformanceTraceList(1, 20, '', 50000); // >= 50s
+        assert.strictEqual(listCostFilter.total, 1);
+
+        const listCostFilterNone = await testDb.getPerformanceTraceList(1, 20, '', 80000); // >= 80s
+        assert.strictEqual(listCostFilterNone.total, 0);
+
+        // 3. 关键字过滤
+        const listKwFilter = await testDb.getPerformanceTraceList(1, 20, 'PurchaseOrder');
+        assert.strictEqual(listKwFilter.total, 1);
+
+        const listKwFilterNone = await testDb.getPerformanceTraceList(1, 20, 'NonExistentService');
+        assert.strictEqual(listKwFilterNone.total, 0);
+    } finally {
+        await testDb.close();
+    }
+});
+
+test('34. 独立新增测试：getPerformanceTree 深度调用树组装、Top 5 自耗时热点排序与四维耗时统计断言', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    const samplePerfLog = path.resolve(__dirname, 'fixtures', 'perf', 'sample-perf.log');
+    const collectedTraces = [];
+    await parseLogFile(samplePerfLog, () => {}, 0, (perfTrace) => {
+        collectedTraces.push(perfTrace);
+    });
+
+    await testDb.insertPerfBatch(collectedTraces);
+
+    try {
+        const treeData = await testDb.getPerformanceTree('43tv9pop1703907v2p9dss1-40');
+        assert.ok(treeData, '应成功获取 Performance 树数据');
+        assert.ok(treeData.trace, '包含 trace 摘要');
+        assert.ok(treeData.actions.length > 5000, '包含全部 actions');
+        assert.strictEqual(treeData.topSelfHotspots.length, 5, 'Top 5 自耗时热点应恰好 5 条');
+
+        // 热点降序断言
+        const h0 = treeData.topSelfHotspots[0];
+        const h1 = treeData.topSelfHotspots[1];
+        assert.strictEqual(h0.action_name, 'MidVEFilter.doFilter');
+        assert.strictEqual(h0.self_time_ms, 25262.86);
+        assert.strictEqual(h1.action_name, 'loadObject/MM_PurchaseOrder');
+        assert.strictEqual(h1.self_time_ms, 7906.87);
+        assert.ok(h0.self_time_ms >= h1.self_time_ms);
+    } finally {
+        await testDb.close();
+    }
+});
+
+test('35. 独立新增测试：HTTP API /api/perf-trace-list 与 /api/perf-tree 端到端请求及前端 Tab 渲染断言', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
+
+    const samplePerfLog = path.resolve(__dirname, 'fixtures', 'perf', 'sample-perf.log');
+    const collectedTraces = [];
+    await parseLogFile(samplePerfLog, () => {}, 0, (perfTrace) => {
+        collectedTraces.push(perfTrace);
+    });
+    await testDb.insertPerfBatch(collectedTraces);
+
+    const parseStats = { totalFiles: 1, totalLines: 10430, totalRecords: 0, totalPerfTraces: 1, costMs: 120 };
+    const server = createServer(testDb, parseStats, 0);
+    const port = server.address().port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+        // 1. GET / 验证 HTML 中包含性能树 Tab 按钮与面板
+        const htmlRes = await fetch(`${baseUrl}/`);
+        const htmlText = await htmlRes.text();
+        assert.ok(htmlText.includes('data-tab="perf-tree"'), '前端 HTML 必须包含 perf-tree Tab 按钮');
+        assert.ok(htmlText.includes('id="panel-perf-tree"'), '前端 HTML 必须包含 panel-perf-tree 面板容器');
+        assert.ok(htmlText.includes('id="perf-tbody"'), '前端 HTML 必须包含 perf-tbody 列表容器');
+        assert.ok(htmlText.includes('id="perf-tree-tbody"'), '前端 HTML 必须包含 perf-tree-tbody 树容器');
+
+        // 2. GET /api/perf-trace-list 接口
+        const listRes = await fetch(`${baseUrl}/api/perf-trace-list?page=1&pageSize=20`);
+        const listJson = await listRes.json();
+        assert.strictEqual(listJson.success, true);
+        assert.strictEqual(listJson.total, 1);
+        assert.strictEqual(listJson.data[0].trace_id, '43tv9pop1703907v2p9dss1-40');
+
+        // 3. GET /api/perf-tree 接口
+        const treeRes = await fetch(`${baseUrl}/api/perf-tree?traceId=43tv9pop1703907v2p9dss1-40`);
+        const treeJson = await treeRes.json();
+        assert.strictEqual(treeJson.success, true);
+        assert.strictEqual(treeJson.data.trace.trace_id, '43tv9pop1703907v2p9dss1-40');
+        assert.ok(treeJson.data.actions.length > 5000);
+        assert.strictEqual(treeJson.data.topSelfHotspots.length, 5);
+    } finally {
+        server.close();
+        await testDb.close();
+    }
+});
+
