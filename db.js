@@ -150,9 +150,21 @@ class SqlLogDatabase {
             params.push(`%${keyword}%`);
         }
 
-        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs ${whereClause}`;
-        const countRows = await this.query(countSql, params);
-        const total = countRows[0] ? Number(countRows[0].total) : 0;
+        const statSql = `
+            SELECT 
+                COUNT(*) as total_sqls,
+                COUNT(DISTINCT trace_id) as total_traces,
+                COUNT(DISTINCT sql_template) as total_templates,
+                COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(exec_time_ms), 0) as max_cost_ms
+            FROM sqllogs ${whereClause}
+        `;
+        const statRows = await this.query(statSql, params);
+        const total = statRows[0] ? Number(statRows[0].total_templates) : 0;
+        const totalSqls = statRows[0] ? Number(statRows[0].total_sqls) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
+        const totalTraces = statRows[0] ? Number(statRows[0].total_traces) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -170,7 +182,7 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, page, pageSize };
+        return { rows, total, totalSqls, totalCostMs, maxCostMs, totalTraces, page, pageSize };
     }
 
     /**
@@ -198,14 +210,17 @@ class SqlLogDatabase {
         const statSql = `
             SELECT 
                 COUNT(*) as total,
+                COUNT(DISTINCT trace_id) as total_traces,
                 COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
                 COALESCE(MAX(exec_time_ms), 0) as max_cost_ms
             FROM sqllogs ${whereClause}
         `;
         const statRows = await this.query(statSql, params);
         const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalSqls = total;
         const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
         const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
+        const totalTraces = statRows[0] ? Number(statRows[0].total_traces) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -216,14 +231,14 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, totalCostMs, maxCostMs, page, pageSize };
+        return { rows, total, totalSqls, totalCostMs, maxCostMs, totalTraces, page, pageSize };
     }
 
     /**
      * 🔗 按 TraceID 获取该动作下的全量 SQL 按时间顺序排列 (支持后端分页，默认大页面，附带总耗时统计)
      */
     async getByTraceId(traceId, page = null, pageSize = 200) {
-        if (!traceId) return page !== null ? { rows: [], total: 0, totalCostMs: 0, avgCostMs: 0, page: 1, pageSize } : [];
+        if (!traceId) return page !== null ? { rows: [], total: 0, totalSqls: 0, totalCostMs: 0, maxCostMs: 0, avgCostMs: 0, totalTraces: 0, page: 1, pageSize } : [];
 
         const whereClause = 'WHERE trace_id = ?';
         const params = [traceId];
@@ -242,13 +257,17 @@ class SqlLogDatabase {
             SELECT 
                 COUNT(*) as total,
                 COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(exec_time_ms), 0) as max_cost_ms,
                 COALESCE(ROUND(AVG(exec_time_ms), 2), 0) as avg_cost_ms
             FROM sqllogs ${whereClause}
         `;
         const statRows = await this.query(statSql, params);
         const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalSqls = total;
         const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
         const avgCostMs = statRows[0] ? Number(statRows[0].avg_cost_ms) : 0;
+        const totalTraces = (traceId && traceId !== '-') ? 1 : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -259,14 +278,14 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, totalCostMs, avgCostMs, page, pageSize };
+        return { rows, total, totalSqls, totalCostMs, maxCostMs, avgCostMs, totalTraces, page, pageSize };
     }
 
     /**
      * 📋 按 SQL 模板查询调用明细 (支持后端分页、traceId 与 dbManager 精准过滤、总耗时统计)
      */
     async getByTemplate(sqlTemplate, page = 1, pageSize = 50, traceId = '', dbManager = '') {
-        if (!sqlTemplate) return { rows: [], total: 0, totalCostMs: 0, avgCostMs: 0, page: 1, pageSize };
+        if (!sqlTemplate) return { rows: [], total: 0, totalSqls: 0, totalCostMs: 0, maxCostMs: 0, avgCostMs: 0, totalTraces: 0, page: 1, pageSize };
 
         let whereClause = 'WHERE sql_template = ?';
         const params = [sqlTemplate];
@@ -284,14 +303,19 @@ class SqlLogDatabase {
         const statSql = `
             SELECT 
                 COUNT(*) as total,
+                COUNT(DISTINCT trace_id) as total_traces,
                 COALESCE(SUM(exec_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(exec_time_ms), 0) as max_cost_ms,
                 COALESCE(ROUND(AVG(exec_time_ms), 2), 0) as avg_cost_ms
             FROM sqllogs ${whereClause}
         `;
         const statRows = await this.query(statSql, params);
         const total = statRows[0] ? Number(statRows[0].total) : 0;
+        const totalSqls = total;
         const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
         const avgCostMs = statRows[0] ? Number(statRows[0].avg_cost_ms) : 0;
+        const totalTraces = statRows[0] ? Number(statRows[0].total_traces) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -304,7 +328,7 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(dataSql, [...params, pageSize, offset]);
-        return { rows, total, totalCostMs, avgCostMs, page, pageSize };
+        return { rows, total, totalSqls, totalCostMs, maxCostMs, avgCostMs, totalTraces, page, pageSize };
     }
 
     /**
@@ -326,13 +350,31 @@ class SqlLogDatabase {
             havingParams.push(minCostMs);
         }
 
-        const countSql = `
-            SELECT COUNT(*) as total FROM (
-                SELECT 1 FROM sqllogs ${whereClause} GROUP BY trace_id ${havingClause}
+        const statSql = `
+            WITH trace_groups AS (
+                SELECT 
+                    trace_id,
+                    COUNT(*) as sql_count,
+                    SUM(exec_time_ms) as total_time_ms,
+                    MAX(exec_time_ms) as max_time_ms
+                FROM sqllogs
+                ${whereClause}
+                GROUP BY trace_id
+                ${havingClause}
             )
+            SELECT 
+                COUNT(*) as total_traces,
+                COALESCE(SUM(sql_count), 0) as total_sqls,
+                COALESCE(SUM(total_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(max_time_ms), 0) as max_cost_ms
+            FROM trace_groups
         `;
-        const countRows = await this.query(countSql, [...params, ...havingParams]);
-        const total = countRows[0] ? Number(countRows[0].total) : 0;
+        const statRows = await this.query(statSql, [...params, ...havingParams]);
+        const total = statRows[0] ? Number(statRows[0].total_traces) : 0;
+        const totalTraces = total;
+        const totalSqls = statRows[0] ? Number(statRows[0].total_sqls) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
 
         const offset = (page - 1) * pageSize;
         const dataSql = `
@@ -361,7 +403,7 @@ class SqlLogDatabase {
             max_time_ms: Number(r.max_time_ms || 0),
             tx_count: Number(r.tx_count || 0)
         }));
-        return { rows: mappedRows, total, page, pageSize };
+        return { rows: mappedRows, total, totalSqls, totalCostMs, maxCostMs, totalTraces, page, pageSize };
     }
 
     /**
@@ -381,13 +423,34 @@ class SqlLogDatabase {
             params.push(`%${keyword}%`);
         }
 
-        const countSql = `
-            SELECT COUNT(*) as cnt FROM (
-                SELECT 1 FROM sqllogs ${whereClause} GROUP BY trace_id, db_manager, sql_template HAVING COUNT(*) >= ?
+        const statSql = `
+            WITH diag_groups AS (
+                SELECT 
+                    trace_id,
+                    db_manager,
+                    sql_template,
+                    COUNT(*) as repeat_count,
+                    SUM(exec_time_ms) as total_time_ms,
+                    MAX(exec_time_ms) as max_time_ms
+                FROM sqllogs
+                ${whereClause}
+                GROUP BY trace_id, db_manager, sql_template
+                HAVING COUNT(*) >= ?
             )
+            SELECT 
+                COUNT(*) as total_groups,
+                COALESCE(SUM(repeat_count), 0) as total_sqls,
+                COALESCE(SUM(total_time_ms), 0) as total_cost_ms,
+                COALESCE(MAX(max_time_ms), 0) as max_cost_ms,
+                COUNT(DISTINCT trace_id) as total_traces
+            FROM diag_groups
         `;
-        const countRes = await this.query(countSql, [...params, minRepeatCount]);
-        const total = countRes[0] ? Number(countRes[0].cnt) : 0;
+        const statRows = await this.query(statSql, [...params, minRepeatCount]);
+        const total = statRows[0] ? Number(statRows[0].total_groups) : 0;
+        const totalSqls = statRows[0] ? Number(statRows[0].total_sqls) : 0;
+        const totalCostMs = statRows[0] ? Number(statRows[0].total_cost_ms) : 0;
+        const maxCostMs = statRows[0] ? Number(statRows[0].max_cost_ms) : 0;
+        const totalTraces = statRows[0] ? Number(statRows[0].total_traces) : 0;
 
         const offset = (page - 1) * pageSize;
         const sql = `
@@ -405,7 +468,7 @@ class SqlLogDatabase {
             LIMIT ? OFFSET ?
         `;
         const rows = await this.query(sql, [...params, minRepeatCount, pageSize, offset]);
-        return { rows, total, page, pageSize };
+        return { rows, total, totalSqls, totalCostMs, maxCostMs, totalTraces, page, pageSize };
     }
 
     async close() {

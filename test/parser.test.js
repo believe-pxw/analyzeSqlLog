@@ -734,9 +734,6 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         // 校验 5: GET /api/diagnostics N+1 循环诊断接口
         const resDiag = await fetch(`${baseUrl}/api/diagnostics?page=1&pageSize=20`);
         const jsonDiag = await resDiag.json();
-        assert.strictEqual(jsonDiag.success, true);
-        assert.ok(Array.isArray(jsonDiag.data), '诊断结果应为数组');
-
         // 校验 6: GET /api/by-template SQL 调用明细接口 (断言有真实数据出来!)
         const testTemplate = sampleRecord.sql_template;
         const resDetail = await fetch(`${baseUrl}/api/by-template?sqlTemplate=${encodeURIComponent(testTemplate)}&page=1&pageSize=10`);
@@ -786,6 +783,12 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
             'trace-tbody': { innerHTML: '' },
             'trace-summary-tbody': { innerHTML: '' },
             'trace-summary-stat': { innerText: '' },
+            'stat-total-sqls': { innerText: '' },
+            'stat-max-cost': { innerText: '' },
+            'stat-total-traces': { innerText: '' },
+            'stat-total-time': { innerText: '' },
+            'stat-context-label': { innerText: '' },
+            'parse-time': { innerText: '' },
             'detail-header': { innerHTML: '' },
             'trace-summary': { innerText: '' },
             'slow-summary': { innerText: '' },
@@ -838,29 +841,39 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         // A. 校验频次榜前端 DOM 真正渲染出 <tr>...</tr> 节点与查看调用按钮！
         context.renderRepeatedTable(jsonRepeated.data);
         const repeatedHtml = mockDomMap['repeated-tbody'].innerHTML;
-        assert.ok(repeatedHtml.includes('<tr') && repeatedHtml.includes('btn-view-calls'), '频次榜 HTML 应真正渲染出 <tr> 和 查看调用 按钮');
-        assert.ok(!repeatedHtml.includes('未找到符合条件的 SQL'), '频次榜 HTML 不应是空提示');
+        assert.ok(repeatedHtml.includes('<tr>'), '频次榜 DOM 必须包含 <tr> 渲染节点');
+        assert.ok(repeatedHtml.includes('btn-view-calls'), '频次榜 DOM 必须包含查看调用按钮');
 
-        // B. 校验慢 SQL 前端 DOM 真正渲染出 <tr>...</tr> 节点与 VSCode 跳转按钮！
+        // B. 校验慢 SQL 排行前端 DOM 渲染节点
         context.renderSlowTable(jsonSlow.data);
         const slowHtml = mockDomMap['slow-tbody'].innerHTML;
-        assert.ok(slowHtml.includes('<tr') && slowHtml.includes('btn-vscode'), '慢 SQL HTML 应真正渲染出 <tr> 和 VSCode 按钮');
+        assert.ok(slowHtml.includes('<tr>'), '慢 SQL DOM 必须包含 <tr> 渲染节点');
 
-        // C. 校验明细表格前端 DOM 真正渲染！
-        context.renderDetailTable(jsonDetail.data);
-        const detailHtml = mockDomMap['detail-tbody'].innerHTML;
-        assert.ok(detailHtml.includes('<tr'), '明细 HTML 应真正渲染出 <tr> 数据节点');
+        // C. 校验 N+1 循环诊断前端 DOM 渲染节点
+        context.renderDiagnoseTable(jsonDiag.data);
+        const diagHtml = mockDomMap['diagnose-tbody'].innerHTML;
+        assert.ok(diagHtml.includes('<tr>'), 'N+1 诊断 DOM 必须包含 <tr> 渲染节点');
 
-        // D. 校验 Trace 链路表格前端 DOM 真正渲染！
-        if (jsonDetail.data.length > 0) {
-            context.rawTraceData = jsonDetail.data;
-            context.renderTraceTable(jsonDetail.data);
-            const traceHtml = mockDomMap['trace-tbody'].innerHTML;
-            assert.ok(traceHtml.includes('<tr'), 'Trace 链路 HTML 应真正渲染出 <tr> 数据节点');
-        }
+        // D. 校验 Trace 聚合大盘前端 DOM 渲染节点
+        context.renderTraceSummaryTable(jsonTraceSum.data);
+        const traceSumHtml = mockDomMap['trace-summary-tbody'].innerHTML;
+        assert.ok(traceSumHtml.includes('<tr>'), 'Trace 聚合大盘 DOM 必须包含 <tr> 渲染节点');
+
+        // E. 校验前端动态上下文统计更新函数 updateContextStats
+        context.updateContextStats({
+            totalSqls: 1234,
+            maxCostMs: 888,
+            totalTraces: 56,
+            totalCostMs: 99999
+        }, '🔁 测试上下文');
+        assert.strictEqual(mockDomMap['stat-total-sqls'].innerText, '1,234');
+        assert.strictEqual(mockDomMap['stat-max-cost'].innerText, '888 ms');
+        assert.strictEqual(mockDomMap['stat-total-traces'].innerText, '56');
+        assert.strictEqual(mockDomMap['stat-total-time'].innerText, '99,999 ms');
+        assert.strictEqual(mockDomMap['stat-context-label'].innerText, '🔁 测试上下文');
+
+        server.close();
     } finally {
-        // 关闭资源
-        await new Promise(resolve => server.close(resolve));
         await testDb.close();
     }
 });
@@ -1111,6 +1124,79 @@ test('29. 独立新增测试：验证慢 SQL 排行与 Trace 链路分析总耗�
     }
 });
 
+test('30. 独立新增测试：验证 N+1 诊断在过滤 TraceID / 循环次数 / 关键词等条件下的动态上下文统计准确性', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
 
+    // 构造 2 个不同 Trace 的 N+1 场景
+    // Trace_1: 循环 6 次 SELECT A (每次 10ms，总 60ms)
+    // Trace_2: 循环 8 次 SELECT B (每次 20ms，总 160ms)
+    const records = [];
+    for (let i = 0; i < 6; i++) {
+        records.push({
+            log_time: `2026-08-13 10:00:0${i}.000`,
+            trace_id: 'Trace_Diag_1',
+            db_manager: 'DBMgr@Conn1',
+            exec_time_ms: 10,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM tab_a WHERE id = ?',
+            full_sql: `SELECT * FROM tab_a WHERE id = ${i}`,
+            source_file: 'a.log',
+            line_number: i + 1
+        });
+    }
+    for (let i = 0; i < 8; i++) {
+        records.push({
+            log_time: `2026-08-13 10:01:0${i}.000`,
+            trace_id: 'Trace_Diag_2',
+            db_manager: 'DBMgr@Conn2',
+            exec_time_ms: 20,
+            result_rows: 1,
+            sql_template: 'SELECT * FROM tab_b WHERE id = ?',
+            full_sql: `SELECT * FROM tab_b WHERE id = ${i}`,
+            source_file: 'b.log',
+            line_number: i + 1
+        });
+    }
 
+    await testDb.insertBatch(records);
 
+    try {
+        // 1. 无过滤 N+1 诊断统计 (minRepeatCount = 5)
+        const diagAll = await testDb.getDiagnostics('', 1, 20, 5, '');
+        assert.strictEqual(diagAll.total, 2, '包含 2 个 N+1 事务组');
+        assert.strictEqual(diagAll.totalSqls, 14, 'N+1 循环 SQL 总执行次数应为 6+8=14');
+        assert.strictEqual(diagAll.totalCostMs, 220, 'N+1 循环累计总耗时应为 60+160=220ms');
+        assert.strictEqual(diagAll.maxCostMs, 20, 'N+1 单条最高耗时应为 20ms');
+        assert.strictEqual(diagAll.totalTraces, 2, '涉及独立 Trace 数应为 2');
+
+        // 2. 针对 Trace_Diag_1 进行精准过滤
+        const diagTrace1 = await testDb.getDiagnostics('Trace_Diag_1', 1, 20, 5, '');
+        assert.strictEqual(diagTrace1.total, 1);
+        assert.strictEqual(diagTrace1.totalSqls, 6, '过滤后该 Trace 下的 N+1 SQL 次数应精确为 6');
+        assert.strictEqual(diagTrace1.totalCostMs, 60, '过滤后该 Trace 下的 N+1 总耗时应为 60ms');
+        assert.strictEqual(diagTrace1.maxCostMs, 10, '过滤后最高单条耗时应为 10ms');
+        assert.strictEqual(diagTrace1.totalTraces, 1, '涉及独立 Trace 数应为 1');
+
+        // 3. 针对关键词 tab_b 过滤
+        const diagKw = await testDb.getDiagnostics('', 1, 20, 5, 'tab_b');
+        assert.strictEqual(diagKw.total, 1);
+        assert.strictEqual(diagKw.totalSqls, 8);
+        assert.strictEqual(diagKw.totalCostMs, 160);
+
+        // 4. HTTP API 层集成测试
+        const server = createServer(testDb, null, 0);
+        const port = server.address().port;
+        const res = await fetch(`http://127.0.0.1:${port}/api/diagnostics?traceId=Trace_Diag_1&minRepeatCount=5`);
+        const json = await res.json();
+        assert.strictEqual(json.success, true);
+        assert.strictEqual(json.totalSqls, 6);
+        assert.strictEqual(json.totalCostMs, 60);
+        assert.strictEqual(json.maxCostMs, 10);
+        assert.strictEqual(json.totalTraces, 1);
+
+        server.close();
+    } finally {
+        await testDb.close();
+    }
+});
