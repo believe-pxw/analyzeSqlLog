@@ -206,14 +206,16 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 | `repeated`     | 📊 SQL 频次榜 | 全库参数化 SQL 模板聚合，汇总频次与耗时，支持一键查看调用 |
 | `slow`         | 🐢 慢 SQL 排行 | 按单条耗时降序，支持阈值过滤与一键唤起 VSCode 定位 |
 | `trace`        | 🔗 Trace 链路分析 | 按 TraceID 还原时间线序列，支持链路内即时搜索与 VSCode 定位 |
-| `detail`       | 📋 SQL 调用明细 | 由频次榜或 N+1 诊断面板跳转触发，支持精准事务过滤与复制模板 |
+| `detail`       | 📋 SQL 调用明细 | 由频次榜/诊断面板「查看调用」跳转触发，展示指定模板的所有调用，含 VSCode 跳转 |
 
-**前端交互与设计规范：**
-- **全自动无感实时触发**：全面移除所有工具栏中生硬的手工操作按钮，统一接入 **250ms 输入实时防抖 (`oninput`)**、**失焦立即触发 (`onblur` / `onchange`)** 与 **回车即时触发 (`Enter`)**。
-- **高密度紧凑排版**：高精度时间戳（`YYYY-MM-DD HH:mm:ss.SSS`）采用专属 `.col-time` 样式强制单行展示，彻底消除换行撑高行高的问题；表格 padding 精简为 `5px 8px`，单屏信息密度大幅提升。
-- **顶部单行动态联动统计条**：指标严格按 **总耗时 -> 总次数 -> 事务数 -> 最高单条耗时** 顺序排列；在任何 Tab 输入过滤条件时，顶部统计条随上下文实时计算并准确联动显示当前筛选结果的统计指标。
-- **VSCode 一键跳转**：点击 `📂 file:line` 直接唤起 VSCode（对于 `.gz` 压缩日志，自动在后台透明调用 `/api/decompress-gz` 解压后再打开）。
-- **SQL 展开与复制**：左键 0ms 瞬间切换折叠/展开，右键弹出极简自定义菜单一键复制完整 SQL。
+**前端关键交互：**
+- **频次榜/诊断面板「🔍 查看调用」**：`jumpToDetail(sqlTemplate, contextInfo)` → 携带来源、TraceID、dbManager 事务句柄 Hash、循环/执行次数等完整上下文参数跳转到 `detail` Tab 并显示
+- **明细头部（.detail-header）**：完整呈现过滤上下文标签（准确标注来源于 📊 SQL 频次榜 或 🔁 事务内重复 SQL (N+1) 诊断，TraceID 支持直接点击跳转到 Trace 面板）
+- **输入防抖与失焦触发**：输入框支持 250ms 防抖 (`oninput`)、失焦立即触发 (`onblur` / `onchange`) 与回车即时触发 (`Enter`)
+- **表格紧凑排版**：高精度时间戳（`YYYY-MM-DD HH:mm:ss.SSS`）采用 `.col-time` 单行不折行样式，表格内边距为 `5px 8px`
+- **顶部联动统计条**：指标按 **总耗时 -> 总次数 -> 事务数 -> 最高单条耗时** 顺序排列，随当前 Tab 过滤条件动态联动计算
+- **VSCode 一键跳转**：点击 `📂 file:line` 直接唤起 VSCode（`.gz` 压缩日志自动在后台调用 `/api/decompress-gz` 解压后打开）
+- **SQL 展开与复制**：左键 0ms 切换折叠/展开，右键弹出自定义菜单快速复制完整 SQL
 
 ---
 
@@ -241,7 +243,6 @@ CREATE INDEX idx_exec_time ON sqllogs(exec_time_ms);
 | **JSON 临时文件导入** | 绕过 Node.js ↔ DuckDB C++ 绑定的逐行序列化开销，利用 DuckDB SIMD 向量化引擎批量装载 |
 | **Promise 链串行插入** | 解决 DuckDB 底层 C++ 引擎并发写入事务冲突 |
 | **Worker Threads** | 多核 CPU 并行切块解析日志文件，充分利用多核算力 |
-| **单行不换行与高密度 UI** | 解决高精度时间戳导致表格行高膨胀问题，提升开发者单屏代码审阅效率 |
-| **实时防抖与失焦自动触发** | 移除所有手动按钮，输入即所得，大幅降低用户交互摩擦 |
+| **单行不换行与紧凑 UI** | 解决高精度时间戳导致表格行高膨胀问题，提升开发者单屏代码审阅效率 |
 | **内嵌 SPA Dashboard** | 整个前端页面内联在 server.js 中，零前端构建依赖，开箱即用 |
 | **零外部运行时依赖** | 仅依赖 `duckdb`，无 Express/Koa 等厚重框架 |
