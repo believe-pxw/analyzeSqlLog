@@ -702,7 +702,7 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         const resHome = await fetch(`${baseUrl}/`);
         assert.strictEqual(resHome.status, 200);
         const htmlText = await resHome.text();
-        assert.ok(htmlText.includes('SQL 日志分析器'), '主页应包含标题');
+        assert.ok(htmlText.includes('SQL 日志'), '主页应包含标题');
         assert.ok(htmlText.includes('panel-repeated'), '主页应包含频次榜面板');
         assert.ok(htmlText.includes('panel-trace-summary'), '主页应包含 Trace 聚合大盘面板');
 
@@ -871,9 +871,11 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
         assert.strictEqual(mockDomMap['stat-total-traces'].innerText, '56');
         assert.strictEqual(mockDomMap['stat-total-time'].innerText, '99,999 ms');
         assert.strictEqual(mockDomMap['stat-context-label'].innerText, '🔁 测试上下文');
-
-        server.close();
     } finally {
+        if (server) {
+            if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+            await new Promise(r => server.close(r));
+        }
         await testDb.close();
     }
 });

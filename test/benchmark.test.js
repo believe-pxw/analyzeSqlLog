@@ -27,18 +27,22 @@ test('🚀 性能基准测试 1：10 万条结构化 SQL 记录 DuckDB Multi-row
         };
     }
 
-    const start = Date.now();
-    await db.insertBatch(records);
-    const elapsed = Date.now() - start;
+    try {
+        const start = Date.now();
+        await db.insertBatch(records);
+        const elapsed = Date.now() - start;
 
-    const summary = await db.getTotalSummary();
-    assert.strictEqual(Number(summary.total_sqls), TOTAL_RECORDS);
+        const summary = await db.getTotalSummary();
+        assert.strictEqual(Number(summary.total_sqls), TOTAL_RECORDS);
 
-    const throughput = Math.round((TOTAL_RECORDS / elapsed) * 1000);
-    console.log(`\n    ⚡ DuckDB 内存装载基准: 插入 ${TOTAL_RECORDS.toLocaleString()} 条记录耗时: ${elapsed} ms (吞吐率: ${throughput.toLocaleString()} 条/秒)`);
+        const throughput = Math.round((TOTAL_RECORDS / elapsed) * 1000);
+        console.log(`\n    ⚡ DuckDB 内存装载基准: 插入 ${TOTAL_RECORDS.toLocaleString()} 条记录耗时: ${elapsed} ms (吞吐率: ${throughput.toLocaleString()} 条/秒)`);
 
-    // 性能极速基线断言：10 万条记录插入耗时必须在 1500 ms (1.5秒) 内
-    assert.strictEqual(elapsed < 1500, true, `10 万条 SQL 插入耗时 (${elapsed}ms) 超过 1500ms 基线`);
+        // 性能极速基线断言：10 万条记录插入耗时必须在 1500 ms (1.5秒) 内
+        assert.strictEqual(elapsed < 1500, true, `10 万条 SQL 插入耗时 (${elapsed}ms) 超过 1500ms 基线`);
+    } finally {
+        await db.close();
+    }
 });
 
 test('🚀 性能基准测试 2：10 万条在库 SQL 数据的 DuckDB GROUP BY 高维内存聚合与 Top-N 查询耗时断言', async () => {
@@ -64,25 +68,29 @@ test('🚀 性能基准测试 2：10 万条在库 SQL 数据的 DuckDB GROUP BY 
     }
     await db.insertBatch(records);
 
-    // 测试频次榜聚合查询性能
-    const startRepeated = Date.now();
-    const repeated = await db.getTopRepeated(1, 20);
-    const elapsedRepeated = Date.now() - startRepeated;
+    try {
+        // 测试频次榜聚合查询性能
+        const startRepeated = Date.now();
+        const repeated = await db.getTopRepeated(1, 20);
+        const elapsedRepeated = Date.now() - startRepeated;
 
-    // 测试慢 SQL 分页查询性能
-    const startSlow = Date.now();
-    const slow = await db.getTopSlow(1, 20);
-    const elapsedSlow = Date.now() - startSlow;
+        // 测试慢 SQL 分页查询性能
+        const startSlow = Date.now();
+        const slow = await db.getTopSlow(1, 20);
+        const elapsedSlow = Date.now() - startSlow;
 
-    assert.strictEqual(repeated.rows.length, 20);
-    assert.strictEqual(slow.rows.length, 20);
+        assert.strictEqual(repeated.rows.length, 20);
+        assert.strictEqual(slow.rows.length, 20);
 
-    console.log(`    ⚡ DuckDB 高维频次榜 GROUP BY 聚合查询耗时: ${elapsedRepeated} ms`);
-    console.log(`    ⚡ DuckDB 慢 SQL 全表 ORDER BY 排序查询耗时: ${elapsedSlow} ms`);
+        console.log(`    ⚡ DuckDB 高维频次榜 GROUP BY 聚合查询耗时: ${elapsedRepeated} ms`);
+        console.log(`    ⚡ DuckDB 慢 SQL 全表 ORDER BY 排序查询耗时: ${elapsedSlow} ms`);
 
-    // 性能基线断言：DuckDB 在库 10 万条数据聚合必须在 100ms 内响应
-    assert.strictEqual(elapsedRepeated < 100, true, `GROUP BY 频次榜查询耗时 (${elapsedRepeated}ms) 超过 100ms 基线`);
-    assert.strictEqual(elapsedSlow < 100, true, `慢 SQL 全表排序查询耗时 (${elapsedSlow}ms) 超过 100ms 基线`);
+        // 性能基线断言：DuckDB 在库 10 万条数据聚合必须在 100ms 内响应
+        assert.strictEqual(elapsedRepeated < 100, true, `GROUP BY 频次榜查询耗时 (${elapsedRepeated}ms) 超过 100ms 基线`);
+        assert.strictEqual(elapsedSlow < 100, true, `慢 SQL 全表排序查询耗时 (${elapsedSlow}ms) 超过 100ms 基线`);
+    } finally {
+        await db.close();
+    }
 });
 
 test('🚀 性能基准测试 3：50 万行纯文本日志流式状态机解析速度测试', async () => {
