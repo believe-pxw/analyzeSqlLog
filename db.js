@@ -138,11 +138,19 @@ class SqlLogDatabase {
     }
 
     /**
-     * 📊 Top 频次 SQL 榜 (全库 SQL 模板归一化频次与耗时统计，支持后端分页)
+     * 📊 Top 频次 SQL 榜 (全库 SQL 模板归一化频次与耗时统计，支持后端分页与全库关键词搜索)
      */
-    async getTopRepeated(page = 1, pageSize = 20) {
-        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs`;
-        const countRows = await this.query(countSql);
+    async getTopRepeated(page = 1, pageSize = 20, keyword = '') {
+        let whereClause = 'WHERE 1=1';
+        const params = [];
+
+        if (keyword) {
+            whereClause += ' AND sql_template ILIKE ?';
+            params.push(`%${keyword}%`);
+        }
+
+        const countSql = `SELECT COUNT(DISTINCT sql_template) as total FROM sqllogs ${whereClause}`;
+        const countRows = await this.query(countSql, params);
         const total = countRows[0] ? Number(countRows[0].total) : 0;
 
         const offset = (page - 1) * pageSize;
@@ -155,18 +163,19 @@ class SqlLogDatabase {
                 MAX(exec_time_ms) as max_time_ms,
                 COUNT(DISTINCT trace_id) as trace_count
             FROM sqllogs
+            ${whereClause}
             GROUP BY sql_template
             ORDER BY count DESC, total_time_ms DESC
             LIMIT ? OFFSET ?
         `;
-        const rows = await this.query(dataSql, [pageSize, offset]);
+        const rows = await this.query(dataSql, [...params, pageSize, offset]);
         return { rows, total, page, pageSize };
     }
 
     /**
-     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、最小耗时阈值过滤)
+     * 🐢 慢 SQL 排行榜 (支持后端分页、TraceID过滤、最小耗时阈值过滤、全库关键词搜索)
      */
-    async getTopSlow(page = 1, pageSize = 20, traceId = '', minCostMs = 0) {
+    async getTopSlow(page = 1, pageSize = 20, traceId = '', minCostMs = 0, keyword = '') {
         let whereClause = 'WHERE 1=1';
         const params = [];
 
@@ -178,6 +187,11 @@ class SqlLogDatabase {
         if (minCostMs > 0) {
             whereClause += ' AND exec_time_ms >= ?';
             params.push(minCostMs);
+        }
+
+        if (keyword) {
+            whereClause += ' AND (full_sql ILIKE ? OR sql_template ILIKE ?)';
+            params.push(`%${keyword}%`, `%${keyword}%`);
         }
 
         const countSql = `SELECT COUNT(*) as total FROM sqllogs ${whereClause}`;
@@ -259,15 +273,20 @@ class SqlLogDatabase {
     }
 
     /**
-     * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID (支持 TraceID 过滤)，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
+     * 💡 N+1 疑难诊断：基于 dbManager 事务句柄与 TraceID (支持 TraceID 过滤、关键词过滤)，找出同一个事务/连接内重复调用的 SQL 模板 (次数 >= 5)
      */
-    async getDiagnostics(traceId = '', page = 1, pageSize = 20, minRepeatCount = 5) {
+    async getDiagnostics(traceId = '', page = 1, pageSize = 20, minRepeatCount = 5, keyword = '') {
         let whereClause = "WHERE trace_id != '-' AND db_manager != '' AND LOWER(LTRIM(sql_template)) NOT LIKE 'update%'";
         const params = [];
 
         if (traceId) {
             whereClause += ' AND trace_id = ?';
             params.push(traceId);
+        }
+
+        if (keyword) {
+            whereClause += ' AND sql_template ILIKE ?';
+            params.push(`%${keyword}%`);
         }
 
         const countSql = `

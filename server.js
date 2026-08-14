@@ -69,8 +69,9 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                 if (pathname === '/api/top-repeated' && method === 'GET') {
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
+                    const keyword = query.keyword || '';
                     
-                    const result = await dbInstance.getTopRepeated(page, pageSize);
+                    const result = await dbInstance.getTopRepeated(page, pageSize, keyword);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
                     return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
@@ -80,8 +81,9 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const pageSize = parseInt(query.pageSize, 10) || 20;
                     const traceId = query.traceId || '';
                     const minCostMs = parseInt(query.minCostMs, 10) || 0;
+                    const keyword = query.keyword || '';
 
-                    const result = await dbInstance.getTopSlow(page, pageSize, traceId, minCostMs);
+                    const result = await dbInstance.getTopSlow(page, pageSize, traceId, minCostMs, keyword);
                     const processedRows = attachBriefSql(result.rows, 'full_sql');
                     return res.end(safeJsonStringify({ success: true, data: processedRows, total: result.total, page: result.page, pageSize: result.pageSize }));
                 }
@@ -113,8 +115,9 @@ const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
                     const page = parseInt(query.page, 10) || 1;
                     const pageSize = parseInt(query.pageSize, 10) || 20;
                     const minRepeatCount = parseInt(query.minRepeatCount, 10) || 5;
+                    const keyword = query.keyword || '';
 
-                    const result = await dbInstance.getDiagnostics(traceId, page, pageSize, minRepeatCount);
+                    const result = await dbInstance.getDiagnostics(traceId, page, pageSize, minRepeatCount, keyword);
                     const processedRows = attachBriefSql(result.rows, 'sql_template');
                     return res.end(safeJsonStringify({
                         success: true,
@@ -602,7 +605,7 @@ function getDashboardHtml() {
             </div>
             <div class="toolbar">
                 <input type="text" id="trace-diagnose" class="search-input" style="max-width: 240px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadDiagnostics(1)">
-                <input type="text" id="search-diagnose" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 EMM_...）" oninput="filterDiagnoseTable()">
+                <input type="text" id="search-diagnose" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 EMM_...）" oninput="loadDiagnostics(1)">
                 <div style="display: flex; align-items: center; gap: 6px; background: #ffffff; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px;">
                     <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">重复次数 &gt;=</span>
                     <input type="number" id="inp-min-repeat" class="search-input" style="width: 80px; padding: 3px 6px; border: none;" value="5" min="1" placeholder="5" onchange="loadDiagnostics(1)" oninput="loadDiagnostics(1)">
@@ -633,7 +636,7 @@ function getDashboardHtml() {
         <div id="panel-slow" class="panel">
             <div class="toolbar">
                 <input type="text" id="trace-slow" class="search-input" style="max-width: 220px;" placeholder="按 TraceID 筛选 (可选)" oninput="loadSlow(1)">
-                <input type="text" id="search-slow" class="search-input" placeholder="搜索慢 SQL 语句..." oninput="filterSlowTable()">
+                <input type="text" id="search-slow" class="search-input" placeholder="搜索慢 SQL 语句..." oninput="loadSlow(1)">
                 <div style="display: flex; align-items: center; gap: 6px; background: #ffffff; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px;">
                     <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 500;">执行耗时 &gt;=</span>
                     <input type="number" id="inp-min-cost" class="search-input" style="width: 90px; padding: 3px 6px; border: none;" value="0" min="0" placeholder="0" onchange="loadSlow(1)" oninput="loadSlow(1)">
@@ -692,7 +695,7 @@ function getDashboardHtml() {
         <!-- 4. 频次榜 Panel (倒数第二) -->
         <div id="panel-repeated" class="panel">
             <div class="toolbar">
-                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="filterRepeatedTable()">
+                <input type="text" id="search-repeated" class="search-input" placeholder="搜索 SQL 模板关键词（如表名 BK_...）" oninput="loadRepeated(1)">
             </div>
             <div class="table-container">
                 <table>
@@ -903,9 +906,11 @@ function getDashboardHtml() {
 
         async function loadRepeated(page = 1) {
             curRepeatedPage = page;
+            const searchEl = document.getElementById('search-repeated');
+            const keyword = searchEl ? searchEl.value.trim() : '';
 
             try {
-                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}\`);
+                const res = await fetch(\`/api/top-repeated?page=\${curRepeatedPage}&pageSize=\${curRepeatedPageSize}&keyword=\${encodeURIComponent(keyword)}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawRepeatedData = json.data;
@@ -954,10 +959,7 @@ function getDashboardHtml() {
         }
 
         function filterRepeatedTable() {
-            const searchEl = document.getElementById('search-repeated');
-            const q = searchEl ? searchEl.value.toLowerCase() : '';
-            const filtered = rawRepeatedData.filter(d => (d.sql_template || '').toLowerCase().includes(q));
-            renderRepeatedTable(filtered);
+            loadRepeated(1);
         }
 
         async function loadSlow(page = 1) {
@@ -966,9 +968,11 @@ function getDashboardHtml() {
             const traceId = traceEl ? traceEl.value.trim() : '';
             const costEl = document.getElementById('inp-min-cost');
             const minCost = costEl ? (parseInt(costEl.value, 10) || 0) : 0;
+            const searchEl = document.getElementById('search-slow');
+            const keyword = searchEl ? searchEl.value.trim() : '';
 
             try {
-                const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&minCostMs=\${minCost}\`);
+                const res = await fetch(\`/api/top-slow?page=\${curSlowPage}&pageSize=\${curSlowPageSize}&traceId=\${encodeURIComponent(traceId)}&minCostMs=\${minCost}&keyword=\${encodeURIComponent(keyword)}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawSlowData = json.data;
@@ -1013,13 +1017,7 @@ function getDashboardHtml() {
         }
 
         function filterSlowTable() {
-            const q = document.getElementById('search-slow').value.toLowerCase();
-            const filtered = rawSlowData.filter(d => 
-                (d.full_sql || '').toLowerCase().includes(q) || 
-                (d.sql_template || '').toLowerCase().includes(q) ||
-                (d.trace_id || '').toLowerCase().includes(q)
-            );
-            renderSlowTable(filtered);
+            loadSlow(1);
         }
 
         function renderPagination(containerId, page, pageSize, total, onPageChange) {
@@ -1109,8 +1107,6 @@ function getDashboardHtml() {
             }
         }
 
-
-
         /**
          * Trace 链路渲染（保持天然日志时间执行顺序）
          */
@@ -1179,9 +1175,11 @@ function getDashboardHtml() {
             const traceId = traceEl ? traceEl.value.trim() : '';
             const repeatEl = document.getElementById('inp-min-repeat');
             const minRepeat = repeatEl ? (parseInt(repeatEl.value, 10) || 5) : 5;
+            const searchEl = document.getElementById('search-diagnose');
+            const keyword = searchEl ? searchEl.value.trim() : '';
 
             try {
-                const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}&minRepeatCount=\${minRepeat}\`);
+                const res = await fetch(\`/api/diagnostics?page=\${curDiagnosePage}&pageSize=\${curDiagnosePageSize}&traceId=\${encodeURIComponent(traceId)}&minRepeatCount=\${minRepeat}&keyword=\${encodeURIComponent(keyword)}\`);
                 const json = await res.json();
                 if (json.success) {
                     rawDiagnoseData = json.data;
@@ -1196,6 +1194,10 @@ function getDashboardHtml() {
                 const tbody = document.getElementById('diagnose-tbody');
                 if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--accent-red);">⚠️ 网络通信错误，无法连接后端服务 (' + escapeHtml(e.message) + ')</td></tr>';
             }
+        }
+
+        function filterDiagnoseTable() {
+            loadDiagnostics(1);
         }
 
         function renderDiagnoseTable(data) {

@@ -845,31 +845,74 @@ test('25. 独立新增测试：基于 test/fixtures 真实日志构建完整的 
     }
 });
 
-test('26. 独立新增测试：连续打出 SQL执行信息 与 SELECT @@... 时的无损防覆盖闭合测试', async () => {
+test('26. 独立新增测试：以真实 DuckDB 数据库为标准，验证 SELECT @@... 与连续 SQL 无损解析落库与全局检索', async () => {
     const sampleLog = `2026-08-13 15:52:40.193 770491858398800 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [Main_r64yutf91703842bcf68c80-0] [r64yutf91703842bcf68c80-1] [-] [main] com.bokesoft.yes.mid.connection.dbmanager.GeneralDBManager 
 >SQL执行信息:影响行数:[1 rows]      执行时间:[45ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@15fcc93b] 
 >SQL语句:[SELECT @@lower_case_table_names] 
+2026-08-13 15:52:40.193 770491858688400 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [Main_r64yutf91703842bcf68c80-0] [r64yutf91703842bcf68c80-1] [-] [main] com.bokesoft.erp.performance.Performance SELECT @@lower_case_table_names endActive action=-1
 >SQL执行信息:影响行数:[2 rows]      执行时间:[10ms] 	  dbManager：[com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@15fcc93b] 
 >SQL语句:[SELECT 1]`;
 
-    const tmpLogPath = path.join(__dirname, 'temp_consecutive_sql.log');
+    const tmpLogDir = path.join(__dirname, 'temp_db_verify_dir');
+    if (!fs.existsSync(tmpLogDir)) fs.mkdirSync(tmpLogDir, { recursive: true });
+    const tmpLogPath = path.join(tmpLogDir, 'DevNode-server-info-test.log');
     fs.writeFileSync(tmpLogPath, sampleLog);
 
-    try {
-        const records = [];
-        const res = await parseLogFile(tmpLogPath, (record) => {
-            records.push(record);
-        });
+    const testDb = new SqlLogDatabase(':memory:');
+    await testDb.initSchema();
 
-        assert.strictEqual(res.totalRecords, 2, '连续 SQL 应解析出 2 条记录');
-        assert.strictEqual(records.length, 2);
-        assert.strictEqual(records[0].sql_template, 'SELECT @@lower_case_table_names');
-        assert.strictEqual(records[0].exec_time_ms, 45);
-        assert.strictEqual(records[1].sql_template, 'SELECT 1');
-        assert.strictEqual(records[1].exec_time_ms, 10);
+    try {
+        let batch = [];
+        const res = await parseLogs(tmpLogDir, (record) => {
+            batch.push(record);
+            if (batch.length >= 10000) {
+                const toInsert = batch;
+                batch = [];
+                return testDb.insertBatch(toInsert);
+            }
+        });
+        if (batch.length > 0) {
+            await testDb.insertBatch(batch);
+        }
+
+        // 1. 验证解析行数与总条数
+        assert.strictEqual(res.totalRecords, 2, '流式解析总记录数应为 2');
+
+        // 2. 以 DB 真实数据为标准，直查 sqllogs 全表
+        const allDbRows = await testDb.query('SELECT * FROM sqllogs ORDER BY id ASC');
+        assert.strictEqual(allDbRows.length, 2, 'DuckDB 中必须精确存在 2 条持久化 SQL 记录');
+
+        // 3. 严格断言 SELECT @@lower_case_table_names 在 DB 中的各个字段
+        const lowerCaseRecord = allDbRows.find(r => r.sql_template.includes('lower_case_table_names'));
+        assert.ok(lowerCaseRecord, 'DuckDB 中必须能够查出 SELECT @@lower_case_table_names');
+        assert.strictEqual(lowerCaseRecord.sql_template, 'SELECT @@lower_case_table_names');
+        assert.strictEqual(lowerCaseRecord.full_sql, 'SELECT @@lower_case_table_names');
+        assert.strictEqual(lowerCaseRecord.exec_time_ms, 45);
+        assert.strictEqual(lowerCaseRecord.result_rows, 1);
+        assert.strictEqual(lowerCaseRecord.trace_id, 'Main_r64yutf91703842bcf68c80-0');
+        assert.strictEqual(lowerCaseRecord.db_manager, 'com.bokesoft.yes.mid.connection.dbmanager.MySqlDBManager@15fcc93b');
+
+        // 4. 以 DB 业务查询方法为标准进行验证
+        // A. 频次榜全库关键词搜索
+        const repeatedSearch = await testDb.getTopRepeated(1, 20, 'lower_case');
+        assert.strictEqual(repeatedSearch.total, 1, '通过 keyword="lower_case" 在频次榜中应能查出 1 条模板');
+        assert.strictEqual(repeatedSearch.rows[0].sql_template, 'SELECT @@lower_case_table_names');
+
+        // B. 慢 SQL 排行全库关键词搜索
+        const slowSearch = await testDb.getTopSlow(1, 20, '', 0, 'lower_case');
+        assert.strictEqual(slowSearch.total, 1, '通过 keyword="lower_case" 在慢 SQL 中应能查出 1 条记录');
+        assert.strictEqual(slowSearch.rows[0].exec_time_ms, 45);
+
+        // C. 按 TraceID 链路查询
+        const traceRows = await testDb.getByTraceId('Main_r64yutf91703842bcf68c80-0', 1, 50);
+        assert.strictEqual(traceRows.total, 2, 'Trace 链路中应包含该 Trace 下的全部 2 条 SQL');
+        assert.strictEqual(traceRows.rows[0].sql_template, 'SELECT @@lower_case_table_names');
     } finally {
+        await testDb.close();
         if (fs.existsSync(tmpLogPath)) fs.unlinkSync(tmpLogPath);
+        if (fs.existsSync(tmpLogDir)) fs.rmdirSync(tmpLogDir);
     }
 });
+
 
 
