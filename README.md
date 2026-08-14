@@ -44,6 +44,8 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 ```
 解析完成后，程序会自动在默认浏览器中打开可视调优控制台（如 `http://localhost:3000`）。
 
+> 📖 详细图文操作教程与实战排查案例，请参阅 **[用户图文实战指南 (docs/USER_GUIDE.md)](./docs/USER_GUIDE.md)**。
+
 ---
 
 ## 💡 六大开发调优视图
