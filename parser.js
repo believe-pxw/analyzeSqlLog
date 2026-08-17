@@ -45,6 +45,7 @@ function isLogHeader(line) {
 function parseLogHeader(line) {
     const logTime = line.length >= 23 ? line.substring(0, 23) : line;
     let traceId = '-';
+    let spanId = '-';
     let threadName = '-';
     let bracketCount = 0;
     let start = -1;
@@ -57,6 +58,8 @@ function parseLogHeader(line) {
             bracketCount++;
             if (bracketCount === 5) {
                 traceId = line.substring(start, i);
+            } else if (bracketCount === 6) {
+                spanId = line.substring(start, i);
             } else if (bracketCount === 8) {
                 threadName = line.substring(start, i);
                 break;
@@ -65,7 +68,7 @@ function parseLogHeader(line) {
         }
     }
 
-    return { logTime, traceId, threadName };
+    return { logTime, traceId, spanId, threadName };
 }
 
 /**
@@ -113,19 +116,14 @@ function parseActionLine(line) {
 /**
  * 极速流式日志解析器 (同时支持 SQL 日志与 ActionRecorder 性能日志)
  * @param {string} filePath - 日志文件路径
- * @param {function} onRecord - SQL 结构化记录回调函数
- * @param {number} startRecordId - SQL 记录自增起始 ID
- * @param {function} onPerfTrace - Performance 树记录回调函数
- * @returns {Promise<{totalLines: number, totalRecords: number, totalPerfTraces: number}>}
+ * @param {Function} onRecord - 解析到完整 SQL 记录时的回调函数
+ * @param {number} startRecordId - 起始 ID 偏移量
+ * @param {Function} onPerfTrace - 解析到完整 Performance Trace 树时的回调函数
  */
 async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace = null) {
     let inputStream;
     if (filePath.endsWith('.gz')) {
-        const gzStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
-        const gunzip = zlib.createGunzip();
-        gzStream.on('error', (err) => console.error(`读取压缩文件失败 [${filePath}]:`, err.message));
-        gunzip.on('error', (err) => console.error(`解压压缩文件失败 [${filePath}]:`, err.message));
-        inputStream = gzStream.pipe(gunzip);
+        inputStream = fs.createReadStream(filePath).pipe(zlib.createGunzip());
     } else {
         inputStream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 });
     }
@@ -141,13 +139,33 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
 
     let currentRecord = null;
     let captureState = null; // 'sql_template' | 'full_sql' | null
-    let lastHeaderInfo = { logTime: '', traceId: '-', threadName: '-' };
+    let lastHeaderInfo = { logTime: '', traceId: '-', spanId: '-', threadName: '-' };
 
     // Performance ActionRecorder 状态机
     let inPerfBlock = false;
-    let curPerfTraceId = '';
+    let currentPerfTrace = null;
     let lastPerfAction = null;
-    const perfTracesMap = new Map(); // traceId -> { traceInfo, actions: [] }
+    const seenPerfTraceIds = new Set();
+
+    function allocateUniquePerfTraceId(traceId, spanId) {
+        let candidate = (traceId && traceId !== '-') ? traceId : spanId;
+        if (!candidate || candidate === '-') candidate = 'perf_trace';
+
+        let uniqueId = candidate;
+        if (seenPerfTraceIds.has(uniqueId)) {
+            if (spanId && spanId !== '-' && spanId !== candidate && !seenPerfTraceIds.has(spanId)) {
+                uniqueId = spanId;
+            } else {
+                let counter = 2;
+                while (seenPerfTraceIds.has(`${candidate}_#${counter}`)) {
+                    counter++;
+                }
+                uniqueId = `${candidate}_#${counter}`;
+            }
+        }
+        seenPerfTraceIds.add(uniqueId);
+        return uniqueId;
+    }
 
     async function flushCurrent() {
         if (currentRecord) {
@@ -174,6 +192,79 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
         captureState = null;
     }
 
+    async function flushPerfTrace() {
+        if (!currentPerfTrace || currentPerfTrace.actions.length === 0) {
+            currentPerfTrace = null;
+            return;
+        }
+
+        const actions = currentPerfTrace.actions;
+        const levelStack = [];
+        let totalSqlCount = 0;
+        let totalSqlTimeMs = 0;
+        let totalCommitTimeMs = 0;
+        let totalGapTimeMs = 0;
+        let maxDepth = 0;
+
+        actions.forEach((a, idx) => {
+            a.node_id = idx;
+            if (a.level > maxDepth) maxDepth = a.level;
+
+            levelStack[a.level] = idx;
+            a.parent_id = a.level > 0 ? (levelStack[a.level - 1] ?? -1) : -1;
+
+            totalGapTimeMs += a.gap_time_ms;
+
+            if (a.action_name.startsWith('QueryDatabase/')) {
+                totalSqlCount++;
+                totalSqlTimeMs += a.time_ms;
+                a.action_category = 'sql';
+            } else if (a.action_name === 'DB commit' || a.action_name === 'submit') {
+                totalCommitTimeMs += a.time_ms;
+                a.action_category = 'commit';
+            } else {
+                a.action_category = 'biz';
+            }
+        });
+
+        const rootAction = actions.find(a => a.level === 0) || actions[0];
+        const firstService = actions.find(a => a.level === 1) || { action_name: '-' };
+
+        const totalTimeMs = rootAction ? rootAction.time_ms : 0;
+        const selfTimeMs = rootAction ? rootAction.self_time_ms : 0;
+        const bizTimeMs = Math.max(0, Math.round((totalTimeMs - totalSqlTimeMs - totalCommitTimeMs) * 100) / 100);
+
+        const traceSummary = {
+            id: 0,
+            trace_id: currentPerfTrace.trace_id,
+            log_time: currentPerfTrace.log_time,
+            thread_name: currentPerfTrace.thread_name,
+            root_action: rootAction ? rootAction.action_name : 'MidVEFilter.doFilter',
+            service_name: firstService ? firstService.action_name : '-',
+            total_time_ms: totalTimeMs,
+            self_time_ms: selfTimeMs,
+            gap_time_ms: Math.round(totalGapTimeMs * 100) / 100,
+            biz_time_ms: bizTimeMs,
+            sql_time_ms: Math.round(totalSqlTimeMs * 100) / 100,
+            commit_time_ms: Math.round(totalCommitTimeMs * 100) / 100,
+            action_count: actions.length,
+            sql_count: totalSqlCount,
+            max_depth: maxDepth,
+            source_file: currentPerfTrace.source_file,
+            line_number: currentPerfTrace.line_number
+        };
+
+        totalPerfTraces++;
+        if (onPerfTrace) {
+            const res = onPerfTrace({ trace: traceSummary, actions });
+            if (res && typeof res.then === 'function') {
+                await res;
+            }
+        }
+
+        currentPerfTrace = null;
+    }
+
     for await (const rawLine of rl) {
         totalLines++;
         const line = rawLine;
@@ -189,22 +280,34 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
             // 判断是否是 ActionRecorder 性能日志
             if (line.includes('com.bokesoft.erp.performance.ActionRecorder')) {
                 inPerfBlock = true;
-                curPerfTraceId = lastHeaderInfo.traceId;
-                if (!perfTracesMap.has(curPerfTraceId)) {
-                    perfTracesMap.set(curPerfTraceId, {
-                        trace_id: curPerfTraceId,
+
+                // 如果已有正在构建的性能树，但属于不同线程，立即闭合前一笔
+                if (currentPerfTrace && currentPerfTrace.thread_name !== lastHeaderInfo.threadName) {
+                    await flushPerfTrace();
+                }
+
+                if (!currentPerfTrace) {
+                    const uniqueTraceId = allocateUniquePerfTraceId(lastHeaderInfo.traceId, lastHeaderInfo.spanId);
+                    currentPerfTrace = {
+                        trace_id: uniqueTraceId,
                         log_time: lastHeaderInfo.logTime,
                         thread_name: lastHeaderInfo.threadName,
                         source_file: path.resolve(filePath),
                         line_number: totalLines,
                         actions: []
-                    });
+                    };
                 }
                 lastPerfAction = null;
                 continue;
             }
 
             // 非 ActionRecorder 的日志 Header，结束当前 perfBlock
+            if (currentPerfTrace) {
+                // 如果是其他类名日志，若出现不同线程的日志，或者属于当前线程的其他日志，闭合当前性能树
+                if (lastHeaderInfo.threadName === currentPerfTrace.thread_name) {
+                    await flushPerfTrace();
+                }
+            }
             inPerfBlock = false;
             lastPerfAction = null;
 
@@ -246,9 +349,25 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
                 if (parsedAction) {
                     parsedAction.line_number = totalLines;
                     parsedAction.source_file = path.resolve(filePath);
-                    const perfEntry = perfTracesMap.get(curPerfTraceId);
-                    if (perfEntry) {
-                        perfEntry.actions.push(parsedAction);
+
+                    // 如果遇到新的 Level 0 动作，且当前已有动作节点，说明开启了新请求
+                    if (parsedAction.level === 0 && currentPerfTrace && currentPerfTrace.actions.length > 0) {
+                        const oldLogTime = currentPerfTrace.log_time;
+                        const oldThread = currentPerfTrace.thread_name;
+                        await flushPerfTrace();
+                        const uniqueTraceId = allocateUniquePerfTraceId(lastHeaderInfo.traceId, lastHeaderInfo.spanId);
+                        currentPerfTrace = {
+                            trace_id: uniqueTraceId,
+                            log_time: oldLogTime,
+                            thread_name: oldThread,
+                            source_file: path.resolve(filePath),
+                            line_number: totalLines,
+                            actions: []
+                        };
+                    }
+
+                    if (currentPerfTrace) {
+                        currentPerfTrace.actions.push(parsedAction);
                     }
                     lastPerfAction = parsedAction;
                 } else if (lastPerfAction) {
@@ -383,75 +502,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
     }
 
     await flushCurrent();
-
-    // 结构化整理 Performance Traces
-    if (onPerfTrace && perfTracesMap.size > 0) {
-        for (const [traceId, pTrace] of perfTracesMap.entries()) {
-            const actions = pTrace.actions;
-            if (actions.length === 0) continue;
-
-            const levelStack = [];
-            let totalSqlCount = 0;
-            let totalSqlTimeMs = 0;
-            let totalCommitTimeMs = 0;
-            let totalGapTimeMs = 0;
-            let maxDepth = 0;
-
-            actions.forEach((a, idx) => {
-                a.node_id = idx;
-                if (a.level > maxDepth) maxDepth = a.level;
-
-                levelStack[a.level] = idx;
-                a.parent_id = a.level > 0 ? (levelStack[a.level - 1] ?? -1) : -1;
-
-                totalGapTimeMs += a.gap_time_ms;
-
-                if (a.action_name.startsWith('QueryDatabase/')) {
-                    totalSqlCount++;
-                    totalSqlTimeMs += a.time_ms;
-                    a.action_category = 'sql';
-                } else if (a.action_name === 'DB commit' || a.action_name === 'submit') {
-                    totalCommitTimeMs += a.time_ms;
-                    a.action_category = 'commit';
-                } else {
-                    a.action_category = 'biz';
-                }
-            });
-
-            const rootAction = actions.find(a => a.level === 0) || actions[0];
-            const firstService = actions.find(a => a.level === 1) || { action_name: '-' };
-
-            const totalTimeMs = rootAction ? rootAction.time_ms : 0;
-            const selfTimeMs = rootAction ? rootAction.self_time_ms : 0;
-            const bizTimeMs = Math.max(0, Math.round((totalTimeMs - totalSqlTimeMs - totalCommitTimeMs) * 100) / 100);
-
-            const traceSummary = {
-                id: 0,
-                trace_id: traceId,
-                log_time: pTrace.log_time,
-                thread_name: pTrace.thread_name,
-                root_action: rootAction ? rootAction.action_name : 'MidVEFilter.doFilter',
-                service_name: firstService ? firstService.action_name : '-',
-                total_time_ms: totalTimeMs,
-                self_time_ms: selfTimeMs,
-                gap_time_ms: Math.round(totalGapTimeMs * 100) / 100,
-                biz_time_ms: bizTimeMs,
-                sql_time_ms: Math.round(totalSqlTimeMs * 100) / 100,
-                commit_time_ms: Math.round(totalCommitTimeMs * 100) / 100,
-                action_count: actions.length,
-                sql_count: totalSqlCount,
-                max_depth: maxDepth,
-                source_file: pTrace.source_file,
-                line_number: pTrace.line_number
-            };
-
-            totalPerfTraces++;
-            const res = onPerfTrace({ trace: traceSummary, actions });
-            if (res && typeof res.then === 'function') {
-                await res;
-            }
-        }
-    }
+    await flushPerfTrace();
 
     return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces };
 }

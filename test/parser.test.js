@@ -2,6 +2,7 @@ const assert = require('node:assert');
 const { test } = require('node:test');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { parseLogs, parseLogFile, parseTimeToMs, cleanSqlText } = require('../parser');
 const SqlLogDatabase = require('../db');
 const { compressSqlColumns, createServer } = require('../server');
@@ -1390,4 +1391,91 @@ test('35. 独立新增测试：HTTP API /api/perf-trace-list 与 /api/perf-tree 
         await testDb.close();
     }
 });
+
+test('36. 独立新增测试：验证多请求共享同一 Session TraceID 时独立拆分、Level 1 首节点作为唯一 service_name 及 Top 5 热点不串通', async () => {
+    // 模拟一段包含 2 个独立请求的日志文本（两者共享相同的 Session TraceID 但拥有不同的 SpanID 和不同的 Level 1 Service）
+    const mockLogLines = [
+        '2026-08-14 10:56:16.397 839106962650900 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [session-token-123456] [span-req-1] [-] [http-nio-8089-exec-4] com.bokesoft.erp.performance.ActionRecorder',
+        '>================================================================================',
+        '>Level\tTime(0.001ms)\tSelfTime(0.001ms)\tGapTime(0.001ms)\tActionName',
+        '> 0\t12178726\t12178726\t0\tMidVEFilter.doFilter',
+        '> 1\t1000\t800\t200\tWebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder',
+        '> 2\t600\t600\t0\tQueryDatabase/SELECT_VERSION',
+        '>================================================================================',
+        '',
+        '2026-08-14 10:56:18.647 839109212650900 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [session-token-123456] [span-req-2] [-] [http-nio-8089-exec-9] com.bokesoft.erp.performance.ActionRecorder',
+        '>================================================================================',
+        '>Level\tTime(0.001ms)\tSelfTime(0.001ms)\tGapTime(0.001ms)\tActionName',
+        '> 0\t2062690\t2062690\t0\tMidVEFilter.doFilter',
+        '> 1\t1500000\t500000\t100\tRichDocument/BuildScopeTree/RichDocument/BuildScopeTree',
+        '> 2\t1000000\t1000000\t0\tQueryDatabase/SELECT_TREE',
+        '>================================================================================'
+    ].join('\n');
+
+    const tempDir = path.join(os.tmpdir(), 'perf-multi-test-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempLog = path.join(tempDir, 'DevNode-server-info-multi.log');
+    fs.writeFileSync(tempLog, mockLogLines, 'utf-8');
+
+    const collectedTraces = [];
+    try {
+        const parseRes = await parseLogFile(tempLog, () => {}, 0, (perfTrace) => {
+            collectedTraces.push(perfTrace);
+        });
+
+        // 1. 验证解析出 2 笔独立性能树，而不是错误合并为 1 笔
+        assert.strictEqual(parseRes.totalPerfTraces, 2, '必须解析出 2 笔独立性能记录');
+        assert.strictEqual(collectedTraces.length, 2);
+
+        // 2. 验证第一笔请求的独立性
+        const req1 = collectedTraces[0];
+        assert.strictEqual(req1.trace.trace_id, 'session-token-123456');
+        assert.strictEqual(req1.trace.service_name, 'WebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder');
+        assert.strictEqual(req1.trace.total_time_ms, 12178.73);
+        assert.strictEqual(req1.actions.length, 3);
+        assert.strictEqual(req1.actions[0].action_name, 'MidVEFilter.doFilter');
+        assert.strictEqual(req1.actions[1].action_name, 'WebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder');
+
+        // 3. 验证第二笔请求的独立性 (唯一 key 分配与独立 Service)
+        const req2 = collectedTraces[1];
+        assert.strictEqual(req2.trace.trace_id, 'span-req-2');
+        assert.strictEqual(req2.trace.service_name, 'RichDocument/BuildScopeTree/RichDocument/BuildScopeTree');
+        assert.strictEqual(req2.trace.total_time_ms, 2062.69);
+        assert.strictEqual(req2.actions.length, 3);
+        assert.strictEqual(req2.actions[0].action_name, 'MidVEFilter.doFilter');
+        assert.strictEqual(req2.actions[1].action_name, 'RichDocument/BuildScopeTree/RichDocument/BuildScopeTree');
+
+        // 4. 落库并验证 DuckDB 查询与 Top 5 自耗时热点绝不互相串扰
+        const testDb = new SqlLogDatabase(':memory:');
+        await testDb.initSchema();
+        await testDb.insertPerfBatch(collectedTraces);
+
+        const list = await testDb.getPerformanceTraceList(1, 10);
+        assert.strictEqual(list.total, 2);
+        assert.strictEqual(list.rows[0].service_name, 'WebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder');
+        assert.strictEqual(list.rows[1].service_name, 'RichDocument/BuildScopeTree/RichDocument/BuildScopeTree');
+
+        // 验证 req1 的树
+        const tree1 = await testDb.getPerformanceTree(req1.trace.trace_id);
+        assert.strictEqual(tree1.trace.service_name, 'WebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder');
+        assert.strictEqual(tree1.actions.length, 3);
+        // req1 的热点中绝不包含 req2 的方法
+        assert.ok(!tree1.actions.some(a => a.action_name.includes('BuildScopeTree')));
+
+        // 验证 req2 的树
+        const tree2 = await testDb.getPerformanceTree(req2.trace.trace_id);
+        assert.strictEqual(tree2.trace.service_name, 'RichDocument/BuildScopeTree/RichDocument/BuildScopeTree');
+        assert.strictEqual(tree2.actions.length, 3);
+        // req2 的热点中绝不包含 req1 的方法
+        assert.ok(!tree2.actions.some(a => a.action_name.includes('WebMetaService')));
+
+        await testDb.close();
+    } finally {
+        try {
+            fs.unlinkSync(tempLog);
+            fs.rmdirSync(tempDir);
+        } catch (e) {}
+    }
+});
+
 
