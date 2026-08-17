@@ -1478,4 +1478,172 @@ test('36. 独立新增测试：验证多请求共享同一 Session TraceID 时�
     }
 });
 
+test('37. 独立新增测试：性能链路树 SQL 控件多列折叠压缩与方案 1 分层按需折叠渲染断言', async () => {
+    const testDb = new SqlLogDatabase(':memory:');
+    let server = null;
+    try {
+        await testDb.initSchema();
+        const traceRecord = {
+            trace_id: 't-perf-tree-opt-01',
+            service_name: 'Macro_LoadObject/PurchaseOrder',
+            root_action: 'MidVEFilter.doFilter',
+            total_time_ms: 1250,
+            self_time_ms: 10,
+            biz_time_ms: 800,
+            sql_time_ms: 400,
+            commit_time_ms: 30,
+            gap_time_ms: 10,
+            action_count: 5,
+            sql_count: 2,
+            max_depth: 3,
+            log_time: '2026-08-14 10:00:00.000'
+        };
+
+        const actionRecords = [
+            {
+                trace_id: 't-perf-tree-opt-01',
+                node_id: 0,
+                parent_id: -1,
+                level: 0,
+                action_name: 'MidVEFilter.doFilter',
+                action_category: 'biz',
+                time_ms: 1250,
+                self_time_ms: 10,
+                gap_time_ms: 5,
+                source_file: 'MidVEFilter.java',
+                line_number: 100,
+                sql_text: null
+            },
+            {
+                trace_id: 't-perf-tree-opt-01',
+                node_id: 1,
+                parent_id: 0,
+                level: 1,
+                action_name: 'Macro_LoadObject/PurchaseOrder',
+                action_category: 'biz',
+                time_ms: 1200,
+                self_time_ms: 50,
+                gap_time_ms: 0,
+                source_file: 'MacroService.java',
+                line_number: 200,
+                sql_text: null
+            },
+            {
+                trace_id: 't-perf-tree-opt-01',
+                node_id: 2,
+                parent_id: 1,
+                level: 2,
+                action_name: 'QueryDatabase/LoadHeader',
+                action_category: 'sql',
+                time_ms: 300,
+                self_time_ms: 300,
+                gap_time_ms: 0,
+                source_file: 'DBService.java',
+                line_number: 300,
+                sql_text: 'select OID, SOID, POID, VERID, BillNo, VendorName, TotalAmount, Status, Creator from EMM_PurchaseOrder where OID = 1001'
+            },
+            {
+                trace_id: 't-perf-tree-opt-01',
+                node_id: 3,
+                parent_id: 1,
+                level: 2,
+                action_name: 'QueryDatabase/LoadDetails',
+                action_category: 'sql',
+                time_ms: 100,
+                self_time_ms: 100,
+                gap_time_ms: 0,
+                source_file: 'DBService.java',
+                line_number: 310,
+                sql_text: 'select OID, SOID, POID, ItemCode, ItemName, Qty, Price, Amount from EMM_PurchaseOrderDtl where POID = 1001'
+            },
+            {
+                trace_id: 't-perf-tree-opt-01',
+                node_id: 4,
+                parent_id: 1,
+                level: 2,
+                action_name: 'CalculateTaxAmount',
+                action_category: 'biz',
+                time_ms: 5,
+                self_time_ms: 5,
+                gap_time_ms: 0,
+                source_file: 'TaxCalc.java',
+                line_number: 50,
+                sql_text: null
+            }
+        ];
+
+        await testDb.insertPerfBatch([{ trace: traceRecord, actions: actionRecords }]);
+
+        // 1. 启动 HTTP 服务验证 /api/perf-tree 接口
+        server = createServer(testDb, null, 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const port = server.address().port;
+        const res = await fetch(`http://127.0.0.1:${port}/api/perf-tree?traceId=t-perf-tree-opt-01`);
+        const json = await res.json();
+
+        assert.strictEqual(json.success, true);
+        assert.strictEqual(json.data.actions.length, 5);
+
+        // 2. 校验后端 attachBriefSql 是否将 sql_text 进行了列压缩 (brief_sql)
+        const sqlAction1 = json.data.actions.find(a => a.node_id === 2);
+        assert.ok(sqlAction1.brief_sql, 'SQL 动作必须包含 brief_sql 字段');
+        assert.ok(sqlAction1.brief_sql.startsWith('select ... from'), `SQL 必须被压缩为 select ... from, 实际: ${sqlAction1.brief_sql}`);
+        assert.ok(sqlAction1.brief_sql.includes('EMM_PurchaseOrder'), '压缩后必须保留表名和条件');
+
+        // 3. 校验前端 renderPerfTreeNodes 渲染逻辑（在 VM 沙箱中模拟执行）
+        const vm = require('vm');
+        const serverFileContent = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf-8');
+        const fnStart = serverFileContent.indexOf('function getDashboardHtml()');
+        const fnEnd = serverFileContent.indexOf('module.exports');
+        const fnCode = serverFileContent.slice(fnStart, fnEnd);
+        const getDashboardHtml = new Function(fnCode + '\nreturn getDashboardHtml();');
+        const html = getDashboardHtml();
+        const scriptStart = html.indexOf('<script>') + 8;
+        const scriptEnd = html.indexOf('</script>');
+        const jsCode = html.slice(scriptStart, scriptEnd);
+
+        const mockDomMap = {
+            'perf-tree-tbody': { innerHTML: '' }
+        };
+        const sandbox = {
+            document: {
+                getElementById: (id) => mockDomMap[id] || null,
+                querySelectorAll: () => [],
+                addEventListener: () => {}
+            },
+            window: {},
+            console
+        };
+        const context = vm.createContext(sandbox);
+        vm.runInContext(jsCode, context);
+
+        context.renderPerfTreeNodes(json.data.actions, 1250);
+        const treeTbodyHtml = mockDomMap['perf-tree-tbody'].innerHTML;
+
+        // 4. 断言方案 1：Level 0 和 Level 1 默认展开可见（无 display:none），Level 2 默认折叠隐藏（带有 style="display:none;"）
+        assert.ok(treeTbodyHtml.includes('data-node-id="0"'), '必须包含 Level 0 节点行');
+        assert.ok(treeTbodyHtml.includes('data-node-id="1"'), '必须包含 Level 1 节点行');
+        assert.ok(treeTbodyHtml.includes('id="perf-node-row-2" data-node-id="2" data-parent-id="1" data-level="2" data-time="300" style="display:none;"'), 'Level 2 节点初始状态必须为 style="display:none;"');
+        assert.ok(treeTbodyHtml.includes('id="perf-node-row-3" data-node-id="3" data-parent-id="1" data-level="2" data-time="100" style="display:none;"'), 'Level 2 节点初始状态必须为 style="display:none;"');
+
+        // 5. 断言 SQL 控件折叠：HTML 中必须包含 [折叠] 标签以及 data-brief 和 data-full 属性
+        assert.ok(treeTbodyHtml.includes('[折叠]'), '前端 SQL 代码块必须显示 [折叠] 标识');
+        assert.ok(treeTbodyHtml.includes('data-brief="select ... from'), '前端 SQL 代码块必须设置 data-brief 为精简 SQL');
+        assert.ok(treeTbodyHtml.includes('data-full="select OID, SOID'), '前端 SQL 代码块必须设置 data-full 为完整 SQL');
+
+        // 6. 断言有子节点的节点（Node 0 和 Node 1）带有 tree-toggle 折叠展开按钮
+        assert.ok(treeTbodyHtml.includes('class="tree-toggle" data-level="0" onclick="togglePerfNode(0, this)">-</span>'), 'Level 0 根节点默认显示展开状态 (-)');
+        assert.ok(treeTbodyHtml.includes('class="tree-toggle" data-level="1" onclick="togglePerfNode(1, this)">+</span>'), 'Level 1 节点默认显示折叠状态 (+)');
+        assert.ok(treeTbodyHtml.includes('class="tree-toggle-empty"'), '无子节点的叶子节点应显示留白占位');
+
+    } finally {
+        if (server) {
+            if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+            await new Promise(r => server.close(r));
+        }
+        await testDb.close();
+    }
+});
+
+
 
