@@ -1645,5 +1645,125 @@ test('37. 独立新增测试：性能链路树 SQL 控件多列折叠压缩与�
     }
 });
 
+test('38. 独立新增测试：性能链路树自耗时 (Self Time) 动态过滤展开与概览卡片正交归一断言', async () => {
+    const vm = require('vm');
+    const serverFileContent = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf-8');
+    const fnStart = serverFileContent.indexOf('function getDashboardHtml()');
+    const fnEnd = serverFileContent.indexOf('module.exports');
+    const fnCode = serverFileContent.slice(fnStart, fnEnd);
+    const getDashboardHtml = new Function(fnCode + '\nreturn getDashboardHtml();');
+    const html = getDashboardHtml();
+    const scriptStart = html.indexOf('<script>') + 8;
+    const scriptEnd = html.indexOf('</script>');
+    const jsCode = html.slice(scriptStart, scriptEnd);
+
+    const mockDomMap = {
+        'perf-detail-title': { innerHTML: '', innerText: '' },
+        'perf-overview-grid': { innerHTML: '' },
+        'perf-tree-tbody': { innerHTML: '' },
+        'inp-perf-self-time': { value: '' }
+    };
+
+    const domRows = {};
+    const mockDocument = {
+        getElementById: (id) => {
+            if (domRows[id]) return domRows[id];
+            return mockDomMap[id] || null;
+        },
+        querySelectorAll: (selector) => {
+            if (selector === '#perf-tree-tbody tr') {
+                return Object.values(domRows);
+            }
+            if (selector === '.tree-toggle') {
+                return Object.values(domRows).map(r => r.querySelector('.tree-toggle')).filter(Boolean);
+            }
+            return [];
+        },
+        addEventListener: () => {}
+    };
+
+    const sandbox = {
+        document: mockDocument,
+        window: {},
+        console
+    };
+    const context = vm.createContext(sandbox);
+    vm.runInContext(jsCode, context);
+
+    // 1. 验证 renderPerfTreeOverview 渲染 4 张正交卡片
+    const mockTrace = {
+        trace_id: 't-test-self-time-01',
+        total_time_ms: 40358.97,
+        self_time_ms: 23835.88,
+        biz_time_ms: 38214.63,
+        sql_time_ms: 2137.6,
+        commit_time_ms: 6.74,
+        gap_time_ms: 10214,
+        action_count: 235,
+        sql_count: 113,
+        max_depth: 6
+    };
+
+    context.renderPerfTreeOverview(mockTrace);
+    const overviewHtml = mockDomMap['perf-overview-grid'].innerHTML;
+    assert.ok(overviewHtml.includes('请求总耗时 (Run Time)'), '必须包含总耗时卡片');
+    assert.ok(overviewHtml.includes('Java 业务与宏计算纯耗时'), '必须包含 Java 纯耗时卡片');
+    assert.ok(overviewHtml.includes('根自耗时: 23,835.88 ms'), 'Java 卡片必须包含根自耗时拆解');
+    assert.ok(overviewHtml.includes('子方法自耗时: 14,378.75 ms'), 'Java 卡片必须包含子方法自耗时拆解');
+    assert.ok(overviewHtml.includes('数据库 SQL 执行 (113 条)'), '必须包含 SQL 执行卡片');
+    assert.ok(overviewHtml.includes('事务提交阶段'), '必须包含事务提交卡片');
+    assert.ok(!overviewHtml.includes('调度与未覆盖间隙'), '必须移除容易引起重复统计误解的独立 Gap 卡片');
+
+    // 2. 构建包含不同自耗时的测试动作树
+    const testActions = [
+        { node_id: 0, parent_id: -1, level: 0, action_name: 'MidVEFilter.doFilter', time_ms: 1000, self_time_ms: 10, gap_time_ms: 0 },
+        { node_id: 1, parent_id: 0, level: 1, action_name: 'BizService.execute', time_ms: 990, self_time_ms: 20, gap_time_ms: 0 },
+        { node_id: 2, parent_id: 1, level: 2, action_name: 'FastMethod.run', time_ms: 5, self_time_ms: 5, gap_time_ms: 0 },
+        { node_id: 3, parent_id: 1, level: 2, action_name: 'HeavyCalculation.run', time_ms: 500, self_time_ms: 450, gap_time_ms: 0 },
+        { node_id: 4, parent_id: 3, level: 3, action_name: 'HeavySubTask.step1', time_ms: 50, self_time_ms: 50, gap_time_ms: 0 }
+    ];
+
+    context.currentPerfTreeData = { trace: mockTrace, actions: testActions };
+    context.renderPerfTreeNodes(testActions, 1000);
+
+    // 为每个生成的节点行创建 mock DOM 元素
+    testActions.forEach(a => {
+        let toggleObj = { innerText: '-', getAttribute: () => String(a.level) };
+        domRows['perf-node-row-' + a.node_id] = {
+            style: { display: a.level <= 1 ? '' : 'none', backgroundColor: '' },
+            getAttribute: (attr) => {
+                if (attr === 'data-node-id') return String(a.node_id);
+                if (attr === 'data-level') return String(a.level);
+                if (attr === 'data-time') return String(a.time_ms);
+                return '';
+            },
+            querySelector: (sel) => sel === '.tree-toggle' ? toggleObj : null
+        };
+    });
+
+    // 3. 执行自耗时阈值过滤：仅展开自耗时 >= 50ms 的节点
+    context.expandSelfTimePerfTree(50);
+    assert.strictEqual(mockDomMap['inp-perf-self-time'].value, 50, '自耗时输入框应同步更新为 50');
+
+    // 节点 3 (self_time_ms: 450) 和 节点 4 (self_time_ms: 50) 命中，祖先节点 0, 1 也必须被展开可见
+    assert.strictEqual(domRows['perf-node-row-0'].style.display, '', '祖先节点 0 必须展开可见');
+    assert.strictEqual(domRows['perf-node-row-1'].style.display, '', '祖先节点 1 必须展开可见');
+    assert.strictEqual(domRows['perf-node-row-3'].style.display, '', '命中节点 3 (450ms) 必须展开可见');
+    assert.strictEqual(domRows['perf-node-row-3'].style.backgroundColor, '#fef3c7', '命中节点 3 必须高亮');
+    assert.strictEqual(domRows['perf-node-row-4'].style.display, '', '命中节点 4 (50ms) 必须展开可见');
+    assert.strictEqual(domRows['perf-node-row-4'].style.backgroundColor, '#fef3c7', '命中节点 4 必须高亮');
+
+    // 未命中的节点 2 (self_time_ms: 5) 必须保持隐藏
+    assert.strictEqual(domRows['perf-node-row-2'].style.display, 'none', '非热点节点 2 必须保持折叠隐藏');
+    assert.strictEqual(domRows['perf-node-row-2'].style.backgroundColor, '', '非热点节点 2 无高亮');
+
+    // 4. 重置折叠
+    context.collapseAllPerfTree();
+    assert.strictEqual(domRows['perf-node-row-3'].style.display, 'none', '收起后 Level 2 节点 3 必须隐藏');
+    assert.strictEqual(domRows['perf-node-row-4'].style.display, 'none', '收起后 Level 3 节点 4 必须隐藏');
+    assert.strictEqual(mockDomMap['inp-perf-self-time'].value, '', '收起后自耗时输入框应清空');
+});
+
+
 
 
