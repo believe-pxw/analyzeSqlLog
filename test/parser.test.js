@@ -1725,6 +1725,14 @@ test('38. 独立新增测试：性能链路树自耗时 (Self Time) 动态过滤
 
     context.currentPerfTreeData = { trace: mockTrace, actions: testActions };
     context.renderPerfTreeNodes(testActions, 1000);
+    const nodesTbodyHtml = mockDomMap['perf-tree-tbody'].innerHTML;
+
+    // 断言自耗时高亮徽章样式
+    assert.ok(nodesTbodyHtml.includes('<span class="cost-badge cost-purple">10 ms</span>'), '自耗时 10ms 应使用 cost-purple 徽章');
+    assert.ok(nodesTbodyHtml.includes('<span class="cost-badge cost-purple">20 ms</span>'), '自耗时 20ms 应使用 cost-purple 徽章');
+    assert.ok(nodesTbodyHtml.includes('<span class="cost-badge cost-yellow">450 ms</span>'), '自耗时 450ms 应使用 cost-yellow 徽章');
+    assert.ok(nodesTbodyHtml.includes('<span class="cost-badge cost-yellow">50 ms</span>'), '自耗时 50ms 应使用 cost-yellow 徽章');
+    assert.ok(nodesTbodyHtml.includes('<span class="cost-badge cost-blue">5 ms</span>'), '自耗时 5ms 应使用 cost-blue 徽章');
 
     // 为每个生成的节点行创建 mock DOM 元素
     testActions.forEach(a => {
