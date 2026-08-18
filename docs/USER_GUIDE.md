@@ -24,7 +24,6 @@ parselog .
 ```bash
 parselog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 ```
-*(注：原命令 `sqllog` 作为内置别名依然完全兼容可用)*
 
 控制台将在纯内存中瞬间完成解析装载，并自动唤起浏览器打开可视分析大盘（默认端口 `http://localhost:3000`）。
 

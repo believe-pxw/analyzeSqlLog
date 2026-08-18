@@ -77,8 +77,6 @@ analyzeSqlLog/
 **命令行用法：**
 ```bash
 parselog [日志文件或目录路径]
-# 或使用兼容别名
-sqllog [日志文件或目录路径]
 ```
 
 ---

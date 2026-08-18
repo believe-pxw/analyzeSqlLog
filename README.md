@@ -42,7 +42,6 @@ parselog .
 ```bash
 parselog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 ```
-*(注：原命令 `sqllog` 作为内置别名依然完全兼容可用)*
 
 解析完成后，程序会自动在默认浏览器中打开可视调优控制台（默认 `http://localhost:3000`）。
 

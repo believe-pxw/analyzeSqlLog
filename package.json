@@ -1,12 +1,10 @@
 {
-  "name": "analyzesqllog",
+  "name": "parselog",
   "version": "1.1.0",
   "description": "极速全链路日志与性能分析器 (parselog CLI)",
   "main": "index.js",
   "bin": {
-    "parselog": "./index.js",
-    "sqllog": "./index.js",
-    "sqlanalyzer": "./index.js"
+    "parselog": "./index.js"
   },
   "files": [
     "index.js",
