@@ -11,7 +11,7 @@ const DEFAULT_LOG_DIR = `D:\\Users\\boke\\Desktop\\source\\bokeerp\\erp-backend\
 
 async function main() {
     console.log(`\n==================================================`);
-    console.log(`⚡ 极速 SQL 日志分析器 (sqllog CLI)`);
+    console.log(`⚡ 极速全链路日志与性能分析器 (parselog CLI)`);
     console.log(`==================================================`);
 
     const args = process.argv.slice(2);

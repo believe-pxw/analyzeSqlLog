@@ -1,6 +1,6 @@
-# 📖 SQL 日志分析器实战与操作指南 (User Guide)
+# 📖 全链路日志与性能分析器实战与操作指南 (User Guide)
 
-`sqllog CLI` 是一款针对 ERP / YES 平台研发人员量身打造的高性能 SQL 日志分析、链路追溯与架构诊断工具。基于 **Node.js 多核并行流式解析** 与 **DuckDB C++ 纯内存向量计算引擎** 构建，帮助开发者在本地开发与自测调优阶段快速抓取 **N+1 循环隐患、慢 SQL 瓶颈、热点高频模板**，并实现**日志源码行号一键直达**。
+`parselog CLI` 是一款针对 ERP / YES 平台研发人员量身打造的高性能全链路日志分析、方法级性能剖析与 SQL 架构诊断利器。基于 **Node.js 多核并行流式解析** 与 **DuckDB C++ 纯内存向量计算引擎** 构建，帮助开发者在本地开发与自测调优阶段快速抓取 **全链路方法自耗时瓶颈、N+1 循环隐患、慢 SQL 瓶颈、热点高频模板**，并实现**日志源码行号一键直达**。
 
 ---
 
@@ -18,12 +18,13 @@ npm install -g git+https://github.com/believe-pxw/analyzeSqlLog.git --allow-git=
 
 直接在当前开发目录或日志目录下运行：
 ```bash
-sqllog .
+parselog .
 ```
 或者指定日志目录 / 单个日志文件路径（支持 `.log` 文本与 `.log.gz` 压缩包）：
 ```bash
-sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
+parselog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 ```
+*(注：原命令 `sqllog` 作为内置别名依然完全兼容可用)*
 
 控制台将在纯内存中瞬间完成解析装载，并自动唤起浏览器打开可视分析大盘（默认端口 `http://localhost:3000`）。
 
@@ -39,19 +40,21 @@ sqllog "D:\Users\boke\Desktop\source\bokeerp\erp-backend\logs"
 基于平台性能分析日志（`com.bokesoft.erp.performance.ActionRecorder`），以请求生命周期（Root 节点 `MidVEFilter.doFilter`）为根，**自顶向下完整构建 Java 业务方法、宏脚本运算、SQL 查询与事务提交的全链路方法调用树**。直观呈现业务耗时与数据库耗时在请求中的分布占比，秒级定位深层计算瓶颈。
 
 #### 关键特性
-1. **第一层核心 Service 业务动作识别**：在请求列表与分析视图中，自动提取第一层业务 Service/Macro 动作（如 `RichDocument/RichDocumentEvalMacro/.../Macro_LoadObject`），直观展示当前请求所承载的具体业务单据或功能。
-2. **四维耗时全景分布条**：在列表中以彩色堆叠进度条直观展示：
-   - 🟪 **Java 业务与宏运算耗时 (`biz_time_ms`)**
-   - 🟦 **数据库 SQL 执行耗时 (`sql_time_ms`)**
-   - 🟩 **事务提交阶段耗时 (`commit_time_ms`)**
-   - ⬜ **线程调度与未覆盖间隙 (`gap_time_ms`)**
-3. **🔥 Top 5 自耗时热点方法归因**：
-   - 自动扣除所有子节点耗时，计算每个方法的**净自耗时 (`self_time_ms`)** 并严格降序排列；
-   - 一键揪出占用 CPU 密集计算、低效循环或线程空转的热点方法。
-4. **可折叠树形调用表格 & SQL 智能关联**：
-   - 支持多层级缩进与 `+/-` 节点交互折叠/展开；
-   - 自动提取并高亮关联 `QueryDatabase/` 下的多行 SQL 查询语句，支持左键展开与右键一键复制；
-   - 提供「➕ 一键展开全部」、「➖ 一键收起全部」与「🔥 仅展开耗时 > 50ms 分支」等高效快捷操作；
+1. **第一层核心 Service 业务动作识别与隔离**：在请求列表与分析视图中，自动提取第一层业务 Service/Macro 动作（如 `RichDocument/RichDocumentEvalMacro/.../Macro_LoadObject`），直观展示当前请求所承载的具体业务单据或功能，多请求共享同一 TraceID 时严格基于方法生命周期进行隔离。
+2. **四维正交归一大盘卡片**：
+   - ⏱️ **请求总耗时 (Run Time)**：整笔请求的挂钟总运行时间、动作节点数与最大调用深度；
+   - 🟪 **Java 业务与宏计算纯耗时**：精确代表整笔请求除去 SQL 和提交后纯由 Java 代码消耗的时间，副标题清晰呈现 `根自耗时 + 子方法净自耗时`；
+   - 🟦 **数据库 SQL 执行**：整棵树所有 SQL 动作实际执行耗时累加；
+   - 🟩 **事务提交阶段**：`DB commit` / `submit` 动作耗时累加。
+3. **⚡ 自耗时 (Self Time) 动态过滤展开与高亮**：
+   - **动态阈值输入**：在工具栏输入框直接键入 `⚡ 仅展开自耗时 >= [ N ] ms`（如输入 `50` 或 `10`），即刻在前端内存中毫秒级过滤整棵树；
+   - **自动链路回溯**：自动展开命中节点的所有祖先层级，命中节点以黄色背景（`#fef3c7`）高亮突出显示；
+   - **快捷一键筛选**：提供 `⚡ 自耗时 > 50ms`、`⚡ 自耗时 > 10ms`、`🔥 总耗时 > 50ms` 快捷按钮。
+4. **自耗时彩色徽章与百分比进度条**：
+   - 自耗时列提供分级彩色徽章（$\ge 500\text{ms}$ 🔴 红色、$\ge 50\text{ms}$ 🟡 黄色、$\ge 10\text{ms}$ 🟣 紫色、$< 10\text{ms}$ 🔵 浅蓝），横向进度条直观呈现单节点占请求总耗时的比例。
+5. **秒开分层渲染 & SQL 智能多列折叠**：
+   - 默认展开 Level 0 / 1 顶层分支，深层分支按需瞬间秒开；
+   - 自动压缩多列为 `select ... from table`，支持左键展开/折叠与右键一键复制完整 SQL；
    - 每一个调用动作与 SQL 均支持 **📂 VSCode 源码行号直达**。
 
 ---

@@ -1,9 +1,10 @@
 {
   "name": "analyzesqllog",
-  "version": "1.0.0",
-  "description": "极速 SQL 日志分析与可视化工具",
+  "version": "1.1.0",
+  "description": "极速全链路日志与性能分析器 (parselog CLI)",
   "main": "index.js",
   "bin": {
+    "parselog": "./index.js",
     "sqllog": "./index.js",
     "sqlanalyzer": "./index.js"
   },
