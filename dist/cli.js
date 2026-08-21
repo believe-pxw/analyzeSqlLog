@@ -203,7 +203,15 @@ function cleanSqlText(text) {
   if (str.endsWith("]")) {
     str = str.replace(/\s*\]\s*$/, "").trim();
   }
-  return str;
+  if (str.startsWith("SQL\u8BED\u53E5:[")) {
+    str = str.substring(7);
+  } else if (str.startsWith("SQL\u8BED\u53E5:")) {
+    str = str.substring(5);
+  }
+  if (str.endsWith("]")) {
+    str = str.substring(0, str.length - 1);
+  }
+  return str.trim();
 }
 function compressSqlColumns(sql) {
   if (!sql) return "";
@@ -444,7 +452,7 @@ var SqlDao = class {
     };
   }
   async getDiagnostics(traceId = "", page = 1, pageSize = 20, minRepeatCount = 5, keyword = "") {
-    let whereClause = "WHERE db_manager IS NOT NULL AND db_manager != '' AND sql_template IS NOT NULL AND sql_template != ''";
+    let whereClause = "WHERE db_manager IS NOT NULL AND db_manager != '' AND sql_template IS NOT NULL AND sql_template != '' AND sql_template NOT ILIKE 'update %' AND sql_template NOT ILIKE 'delete %' AND sql_template NOT ILIKE 'insert %'";
     const params = [];
     if (traceId) {
       whereClause += " AND trace_id = ?";
@@ -473,12 +481,13 @@ var SqlDao = class {
       GROUP BY trace_id, db_manager, sql_template
       ${havingClause}
     `;
-    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(total_time_ms), 0) as total_cost_ms, COALESCE(SUM(repeat_count), 0) as total_sqls, COUNT(DISTINCT trace_id) as total_traces FROM (${groupSql}) t`;
+    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(total_time_ms), 0) as total_cost_ms, COALESCE(SUM(repeat_count), 0) as total_sqls, COUNT(DISTINCT trace_id) as total_traces, COALESCE(MAX(max_time_ms), 0) as max_cost_ms FROM (${groupSql}) t`;
     const countRes = await this.db.query(countSql, [...params, ...havingParams]);
     const total = Number(countRes[0]?.total || 0);
     const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
     const totalSqls = Number(countRes[0]?.total_sqls || 0);
     const totalTraces = Number(countRes[0]?.total_traces || 0);
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
     const offset = (page - 1) * pageSize;
     const listSql = `
       ${groupSql}
@@ -499,7 +508,7 @@ var SqlDao = class {
       example_line_number: Number(r.example_line_number),
       advice: Number(r.repeat_count) >= 20 ? "\u{1F525} \u4E25\u91CD\u5FAA\u73AF: \u5F3A\u70C8\u5EFA\u8BAE\u6539\u7528\u6279\u91CF IN \u67E5\u8BE2\u6216\u52A0\u7F13\u5B58" : "\u26A0\uFE0F \u91CD\u590D\u6267\u884C: \u5EFA\u8BAE\u8BC4\u4F30\u5FAA\u73AF\u8C03\u7528"
     }));
-    return { data, total, totalCostMs, totalSqls, totalTraces };
+    return { data, total, totalCostMs, totalSqls, totalTraces, maxCostMs };
   }
   async getTraceSummaryList(page = 1, pageSize = 20, keyword = "", minCostMs = 0) {
     let whereClause = "WHERE trace_id IS NOT NULL AND trace_id != '-'";
@@ -560,9 +569,12 @@ var SqlDao = class {
     };
   }
   async getTrace(traceId, page = 1, pageSize = 50) {
-    const countSql = "SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms FROM sqllogs WHERE trace_id = ?";
+    const countSql = "SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms, COALESCE(AVG(exec_time_ms), 0) as avg_cost_ms FROM sqllogs WHERE trace_id = ?";
     const countRes = await this.db.query(countSql, [traceId]);
     const total = Number(countRes[0]?.total || 0);
+    const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
+    const avgCostMs = Math.round(Number(countRes[0]?.avg_cost_ms || 0) * 100) / 100;
     const offset = (page - 1) * pageSize;
     const listSql = `
       SELECT * FROM sqllogs
@@ -578,8 +590,11 @@ var SqlDao = class {
     return {
       data,
       total,
-      totalCostMs: Math.round(Number(countRes[0]?.total_cost_ms || 0)),
-      maxCostMs: Math.round(Number(countRes[0]?.max_cost_ms || 0))
+      totalCostMs,
+      maxCostMs,
+      avgCostMs,
+      page,
+      pageSize
     };
   }
   async getByTemplate(sqlTemplate, page = 1, pageSize = 50, traceId = "", dbManager = "") {
@@ -593,9 +608,12 @@ var SqlDao = class {
       whereClause += " AND db_manager = ?";
       params.push(dbManager);
     }
-    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms FROM sqllogs ${whereClause}`;
+    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms, COALESCE(AVG(exec_time_ms), 0) as avg_cost_ms FROM sqllogs ${whereClause}`;
     const countRes = await this.db.query(countSql, params);
     const total = Number(countRes[0]?.total || 0);
+    const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
+    const avgCostMs = Math.round(Number(countRes[0]?.avg_cost_ms || 0) * 100) / 100;
     const offset = (page - 1) * pageSize;
     const listSql = `
       SELECT * FROM sqllogs
@@ -611,8 +629,11 @@ var SqlDao = class {
     return {
       data,
       total,
-      totalCostMs: Math.round(Number(countRes[0]?.total_cost_ms || 0)),
-      maxCostMs: Math.round(Number(countRes[0]?.max_cost_ms || 0))
+      totalCostMs,
+      maxCostMs,
+      avgCostMs,
+      page,
+      pageSize
     };
   }
 };
@@ -794,6 +815,19 @@ var PerfDao = class {
     }
     hotspots.sort((x, y) => y.selfCostMs - x.selfCostMs);
     const topHotspots = hotspots.slice(0, 5);
+    const topSelfHotspots = topHotspots.map((h) => ({
+      action_name: h.name,
+      name: h.name,
+      self_time_ms: h.selfCostMs,
+      selfCostMs: h.selfCostMs,
+      total_time_ms: h.totalCostMs,
+      totalCostMs: h.totalCostMs,
+      depth: h.depth,
+      source_file: h.sourceFile,
+      sourceFile: h.sourceFile,
+      line_number: h.lineNumber,
+      lineNumber: h.lineNumber
+    }));
     return {
       traceId: trace.trace_id,
       serviceName: trace.service_name,
@@ -810,7 +844,8 @@ var PerfDao = class {
       sourceFile: trace.source_file,
       lineNumber: trace.line_number,
       rootNode: rootNode || (nodeMap.size > 0 ? Array.from(nodeMap.values())[0] : null),
-      hotspots: topHotspots
+      hotspots: topHotspots,
+      topSelfHotspots
     };
   }
 };

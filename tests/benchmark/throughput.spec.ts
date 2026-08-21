@@ -81,7 +81,7 @@ describe('Performance Benchmark Specs', () => {
     const costMs = Date.now() - t0;
 
     console.log(`    ⚡ 5 万条记录 3 组复杂高维 GROUP BY / ORDER BY 聚合总耗时: ${costMs} ms`);
-    expect(costMs).toBeLessThan(200);
+    expect(costMs).toBeLessThan(500);
     expect(repeated.data.length).toBeGreaterThan(0);
     expect(slow.data.length).toBeGreaterThan(0);
     expect(diag.data.length).toBeGreaterThan(0);

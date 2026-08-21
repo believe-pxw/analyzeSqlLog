@@ -29,7 +29,35 @@ export function cleanSqlText(text: string): string {
   if (str.endsWith(']')) {
     str = str.replace(/\s*\]\s*$/, '').trim();
   }
-  return str;
+  if (str.startsWith('SQL语句:[')) {
+    str = str.substring(7);
+  } else if (str.startsWith('SQL语句:')) {
+    str = str.substring(5);
+  }
+  if (str.endsWith(']')) {
+    str = str.substring(0, str.length - 1);
+  }
+  return str.trim();
+}
+
+/**
+ * 解析 SQL 执行信息行 (影响行数、执行时间、dbManager)
+ */
+export function parseSqlExecutionInfo(line: string): { resultRows: number; execTimeMs: number; dbManager: string } {
+  let resultRows = 0;
+  let execTimeMs = 0;
+  let dbManager = '';
+
+  const rowsMatch = line.match(/影响行数:\[(\d+)\s*rows?\]/i);
+  if (rowsMatch) resultRows = parseInt(rowsMatch[1], 10);
+
+  const timeMatch = line.match(/执行时间:\[([^\]]+)\]/i);
+  if (timeMatch) execTimeMs = parseTimeToMs(timeMatch[1]);
+
+  const dbMatch = line.match(/dbManager[：:]\[([^\]]+)\]/i);
+  if (dbMatch) dbManager = dbMatch[1].trim();
+
+  return { resultRows, execTimeMs, dbManager };
 }
 
 /**

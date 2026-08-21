@@ -1,75 +1,123 @@
 import { describe, it, expect } from 'vitest';
-import { parseActionLine, calculatePerfTraceMetrics } from './perfParser';
+import { parseActionLine } from './perfParser';
+import { parseLogFile } from './index';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
 
-describe('Performance ActionRecorder Parser Specs', () => {
-  it('parseActionLine 应当正确解析制表符分隔的性能动作行并换算微秒为毫秒', () => {
-    const raw = '> 0\t125430\t1200\t500\tMidVEFilter.doFilter';
-    const parsed = parseActionLine(raw);
-    expect(parsed).not.toBeNull();
-    expect(parsed?.level).toBe(0);
-    expect(parsed?.time_us).toBe(125430);
-    expect(parsed?.time_ms).toBe(125.43);
-    expect(parsed?.self_time_ms).toBe(1.2);
-    expect(parsed?.gap_time_ms).toBe(0.5);
-    expect(parsed?.action_name).toBe('MidVEFilter.doFilter');
+describe('Performance Parser Specs (ActionRecorder)', () => {
+  it('用例 31: parseActionLine 性能动作行解析与单位微秒换算测试', () => {
+    const line1 = '>0\t69196372\t25262856\t0\tMidVEFilter.doFilter';
+    const res1 = parseActionLine(line1);
+    expect(res1).not.toBeNull();
+    if (res1) {
+      expect(res1.level).toBe(0);
+      expect(res1.time_ms).toBe(69196.37);
+      expect(res1.self_time_ms).toBe(25262.86);
+      expect(res1.gap_time_ms).toBe(0);
+      expect(res1.action_name).toBe('MidVEFilter.doFilter');
+    }
+
+    const line2 = '> 1\t9729706\t7906867\t747\tloadObject/MM_PurchaseOrder';
+    const res2 = parseActionLine(line2);
+    expect(res2).not.toBeNull();
+    if (res2) {
+      expect(res2.level).toBe(1);
+      expect(res2.time_ms).toBe(9729.71);
+      expect(res2.self_time_ms).toBe(7906.87);
+      expect(res2.gap_time_ms).toBe(0.75);
+      expect(res2.action_name).toBe('loadObject/MM_PurchaseOrder');
+    }
+
+    expect(parseActionLine('>===================')).toBeNull();
+    expect(parseActionLine('>Level\tTime(0.001ms)\t...')).toBeNull();
+    expect(parseActionLine('')).toBeNull();
   });
 
-  it('calculatePerfTraceMetrics 应当正确构建层级栈与四维耗时统计', () => {
-    const actions = [
-      {
-        level: 0,
-        time_us: 100000,
-        self_time_us: 10000,
-        gap_time_us: 0,
-        time_ms: 100,
-        self_time_ms: 10,
-        gap_time_ms: 0,
-        action_name: 'MidVEFilter.doFilter',
-        sql_text: '',
-      },
-      {
-        level: 1,
-        time_us: 80000,
-        self_time_us: 5000,
-        gap_time_us: 0,
-        time_ms: 80,
-        self_time_ms: 5,
-        gap_time_ms: 0,
-        action_name: 'com.boke.service.OrderService',
-        sql_text: '',
-      },
-      {
-        level: 2,
-        time_us: 30000,
-        self_time_us: 30000,
-        gap_time_us: 0,
-        time_ms: 30,
-        self_time_ms: 30,
-        gap_time_ms: 0,
-        action_name: 'QueryDatabase/SelectOrder',
-        sql_text: 'SELECT * FROM orders',
-      },
-      {
-        level: 2,
-        time_us: 10000,
-        self_time_us: 10000,
-        gap_time_us: 0,
-        time_ms: 10,
-        self_time_ms: 10,
-        gap_time_ms: 0,
-        action_name: 'DB commit',
-        sql_text: '',
-      },
-    ];
+  it('用例 32: 基于 sample-perf.log 真实日志验证 ActionRecorder 流式解析与多行 SQL 关联及父子关系计算', async () => {
+    const samplePerfLog = path.resolve(__dirname, '../../test/fixtures/perf/sample-perf.log');
+    if (!fs.existsSync(samplePerfLog)) return;
 
-    const result = calculatePerfTraceMetrics('trace-001', '2026-08-20 10:00:00.000', 'T-1', 'app.log', 10, actions);
-    expect(result.trace.trace_id).toBe('trace-001');
-    expect(result.trace.total_time_ms).toBe(100);
-    expect(result.trace.sql_time_ms).toBe(30);
-    expect(result.trace.commit_time_ms).toBe(10);
-    expect(result.trace.biz_time_ms).toBe(60); // 100 - 30 - 10
-    expect(result.trace.service_name).toBe('com.boke.service.OrderService');
-    expect(result.trace.sql_count).toBe(1);
-    expect(result.actions[2].parent_id).toBe(1);
+    const collectedTraces: any[] = [];
+    const parseRes = await parseLogFile(samplePerfLog, () => {}, 0, (perfTrace) => {
+      collectedTraces.push(perfTrace);
+    });
+
+    expect(parseRes.totalPerfTraces).toBeGreaterThan(0);
+    expect(collectedTraces.length).toBe(1);
+
+    const { trace, actions } = collectedTraces[0];
+    expect(trace.trace_id).toBe('43tv9pop1703907v2p9dss1-40');
+    expect(trace.root_action).toBe('MidVEFilter.doFilter');
+    expect(trace.service_name.includes('MM_PurchaseOrder')).toBe(true);
+    expect(trace.total_time_ms).toBe(69196.37);
+    expect(trace.self_time_ms).toBe(25262.86);
+    expect(trace.sql_count).toBeGreaterThan(5000);
+    expect(actions.length).toBeGreaterThan(5100);
+
+    const rootNode = actions.find((a: any) => a.level === 0);
+    expect(rootNode.node_id).toBe(0);
+    expect(rootNode.parent_id).toBe(-1);
+
+    const level1Nodes = actions.filter((a: any) => a.level === 1);
+    expect(level1Nodes.length).toBeGreaterThan(0);
+    level1Nodes.forEach((n: any) => expect(n.parent_id).toBe(0));
+
+    const sqlNode = actions.find((a: any) => a.action_name.startsWith('QueryDatabase/') && a.sql_text);
+    expect(sqlNode).toBeDefined();
+    expect(sqlNode.sql_text.length).toBeGreaterThan(0);
+    expect(sqlNode.action_category).toBe('sql');
+  });
+
+  it('用例 36: 验证多请求共享同一 Session TraceID 时独立拆分、Level 1 首节点作为唯一 service_name 及 Top 5 热点不串通', async () => {
+    const mockLogLines = [
+      '2026-08-14 10:56:16.397 839106962650900 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [session-token-123456] [span-req-1] [-] [http-nio-8089-exec-4] com.bokesoft.erp.performance.ActionRecorder',
+      '>================================================================================',
+      '>Level\tTime(0.001ms)\tSelfTime(0.001ms)\tGapTime(0.001ms)\tActionName',
+      '> 0\t12178726\t12178726\t0\tMidVEFilter.doFilter',
+      '> 1\t1000\t800\t200\tWebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder',
+      '> 2\t600\t600\t0\tQueryDatabase/SELECT_VERSION',
+      '>================================================================================',
+      '',
+      '2026-08-14 10:56:18.647 839109212650900 INFO [DevNode] [2.0.1.10:8089] [2.0.1.10] [WIN-20241012NIM] [session-token-123456] [span-req-2] [-] [http-nio-8089-exec-9] com.bokesoft.erp.performance.ActionRecorder',
+      '>================================================================================',
+      '>Level\tTime(0.001ms)\tSelfTime(0.001ms)\tGapTime(0.001ms)\tActionName',
+      '> 0\t2062690\t2062690\t0\tMidVEFilter.doFilter',
+      '> 1\t1500000\t500000\t100\tRichDocument/BuildScopeTree/RichDocument/BuildScopeTree',
+      '> 2\t1000000\t1000000\t0\tQueryDatabase/SELECT_TREE',
+      '>================================================================================',
+    ].join('\n');
+
+    const tempDir = path.join(os.tmpdir(), 'perf-multi-test-' + Date.now());
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempLog = path.join(tempDir, 'DevNode-server-info-multi.log');
+    fs.writeFileSync(tempLog, mockLogLines, 'utf-8');
+
+    const collectedTraces: any[] = [];
+    try {
+      const parseRes = await parseLogFile(tempLog, () => {}, 0, (perfTrace) => {
+        collectedTraces.push(perfTrace);
+      });
+
+      expect(parseRes.totalPerfTraces).toBe(2);
+      expect(collectedTraces.length).toBe(2);
+
+      const req1 = collectedTraces[0];
+      expect(req1.trace.trace_id).toBe('session-token-123456');
+      expect(req1.trace.service_name).toBe('WebMetaService/GetFormVersion/mmconfig/MM_PurchaseOrder');
+      expect(req1.trace.total_time_ms).toBe(12178.73);
+      expect(req1.actions.length).toBe(3);
+
+      const req2 = collectedTraces[1];
+      expect(req2.trace.trace_id).toBe('span-req-2');
+      expect(req2.trace.service_name).toBe('RichDocument/BuildScopeTree/RichDocument/BuildScopeTree');
+      expect(req2.trace.total_time_ms).toBe(2062.69);
+      expect(req2.actions.length).toBe(3);
+    } finally {
+      try {
+        fs.unlinkSync(tempLog);
+        fs.rmdirSync(tempDir);
+      } catch (e) {}
+    }
   });
 });

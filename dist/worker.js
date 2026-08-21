@@ -149,7 +149,15 @@ function cleanSqlText(text) {
   if (str.endsWith("]")) {
     str = str.replace(/\s*\]\s*$/, "").trim();
   }
-  return str;
+  if (str.startsWith("SQL\u8BED\u53E5:[")) {
+    str = str.substring(7);
+  } else if (str.startsWith("SQL\u8BED\u53E5:")) {
+    str = str.substring(5);
+  }
+  if (str.endsWith("]")) {
+    str = str.substring(0, str.length - 1);
+  }
+  return str.trim();
 }
 
 // src/parser/perfParser.ts

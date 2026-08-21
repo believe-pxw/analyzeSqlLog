@@ -191,6 +191,19 @@ export class PerfDao {
 
     hotspots.sort((x, y) => y.selfCostMs - x.selfCostMs);
     const topHotspots = hotspots.slice(0, 5);
+    const topSelfHotspots = topHotspots.map(h => ({
+      action_name: h.name,
+      name: h.name,
+      self_time_ms: h.selfCostMs,
+      selfCostMs: h.selfCostMs,
+      total_time_ms: h.totalCostMs,
+      totalCostMs: h.totalCostMs,
+      depth: h.depth,
+      source_file: h.sourceFile,
+      sourceFile: h.sourceFile,
+      line_number: h.lineNumber,
+      lineNumber: h.lineNumber
+    }));
 
     return {
       traceId: trace.trace_id,
@@ -208,7 +221,8 @@ export class PerfDao {
       sourceFile: trace.source_file,
       lineNumber: trace.line_number,
       rootNode: rootNode || (nodeMap.size > 0 ? Array.from(nodeMap.values())[0] : null),
-      hotspots: topHotspots
-    };
+      hotspots: topHotspots,
+      topSelfHotspots
+    } as any;
   }
 }

@@ -243,8 +243,8 @@ export class SqlDao {
     };
   }
 
-  public async getDiagnostics(traceId = '', page = 1, pageSize = 20, minRepeatCount = 5, keyword = ''): Promise<{ data: DiagnosticsItem[]; total: number; totalCostMs: number; totalSqls: number; totalTraces: number }> {
-    let whereClause = "WHERE db_manager IS NOT NULL AND db_manager != '' AND sql_template IS NOT NULL AND sql_template != ''";
+  public async getDiagnostics(traceId = '', page = 1, pageSize = 20, minRepeatCount = 5, keyword = ''): Promise<{ data: DiagnosticsItem[]; total: number; totalCostMs: number; totalSqls: number; totalTraces: number; maxCostMs: number }> {
+    let whereClause = "WHERE db_manager IS NOT NULL AND db_manager != '' AND sql_template IS NOT NULL AND sql_template != '' AND sql_template NOT ILIKE 'update %' AND sql_template NOT ILIKE 'delete %' AND sql_template NOT ILIKE 'insert %'";
     const params: any[] = [];
     if (traceId) {
       whereClause += ' AND trace_id = ?';
@@ -276,12 +276,13 @@ export class SqlDao {
       ${havingClause}
     `;
 
-    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(total_time_ms), 0) as total_cost_ms, COALESCE(SUM(repeat_count), 0) as total_sqls, COUNT(DISTINCT trace_id) as total_traces FROM (${groupSql}) t`;
+    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(total_time_ms), 0) as total_cost_ms, COALESCE(SUM(repeat_count), 0) as total_sqls, COUNT(DISTINCT trace_id) as total_traces, COALESCE(MAX(max_time_ms), 0) as max_cost_ms FROM (${groupSql}) t`;
     const countRes = await this.db.query<any>(countSql, [...params, ...havingParams]);
     const total = Number(countRes[0]?.total || 0);
     const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
     const totalSqls = Number(countRes[0]?.total_sqls || 0);
     const totalTraces = Number(countRes[0]?.total_traces || 0);
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
 
     const offset = (page - 1) * pageSize;
     const listSql = `
@@ -305,7 +306,7 @@ export class SqlDao {
       advice: Number(r.repeat_count) >= 20 ? '🔥 严重循环: 强烈建议改用批量 IN 查询或加缓存' : '⚠️ 重复执行: 建议评估循环调用'
     }));
 
-    return { data, total, totalCostMs, totalSqls, totalTraces };
+    return { data, total, totalCostMs, totalSqls, totalTraces, maxCostMs };
   }
 
   public async getTraceSummaryList(page = 1, pageSize = 20, keyword = '', minCostMs = 0): Promise<{ data: TraceSummaryItem[]; total: number; totalCostMs: number; totalSqls: number; totalTraces: number; maxCostMs: number }> {
@@ -372,10 +373,13 @@ export class SqlDao {
     };
   }
 
-  public async getTrace(traceId: string, page = 1, pageSize = 50): Promise<{ data: SqlRecord[]; total: number; totalCostMs: number; maxCostMs: number }> {
-    const countSql = 'SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms FROM sqllogs WHERE trace_id = ?';
+  public async getTrace(traceId: string, page = 1, pageSize = 50): Promise<{ data: SqlRecord[]; total: number; totalCostMs: number; maxCostMs: number; avgCostMs: number; page: number; pageSize: number }> {
+    const countSql = 'SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms, COALESCE(AVG(exec_time_ms), 0) as avg_cost_ms FROM sqllogs WHERE trace_id = ?';
     const countRes = await this.db.query<any>(countSql, [traceId]);
     const total = Number(countRes[0]?.total || 0);
+    const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
+    const avgCostMs = Math.round(Number(countRes[0]?.avg_cost_ms || 0) * 100) / 100;
 
     const offset = (page - 1) * pageSize;
     const listSql = `
@@ -393,12 +397,15 @@ export class SqlDao {
     return {
       data,
       total,
-      totalCostMs: Math.round(Number(countRes[0]?.total_cost_ms || 0)),
-      maxCostMs: Math.round(Number(countRes[0]?.max_cost_ms || 0))
+      totalCostMs,
+      maxCostMs,
+      avgCostMs,
+      page,
+      pageSize
     };
   }
 
-  public async getByTemplate(sqlTemplate: string, page = 1, pageSize = 50, traceId = '', dbManager = ''): Promise<{ data: SqlRecord[]; total: number; totalCostMs: number; maxCostMs: number }> {
+  public async getByTemplate(sqlTemplate: string, page = 1, pageSize = 50, traceId = '', dbManager = ''): Promise<{ data: SqlRecord[]; total: number; totalCostMs: number; maxCostMs: number; avgCostMs: number; page: number; pageSize: number }> {
     let whereClause = 'WHERE sql_template = ?';
     const params: any[] = [sqlTemplate];
     if (traceId) {
@@ -410,9 +417,12 @@ export class SqlDao {
       params.push(dbManager);
     }
 
-    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms FROM sqllogs ${whereClause}`;
+    const countSql = `SELECT COUNT(*) as total, COALESCE(SUM(exec_time_ms), 0) as total_cost_ms, COALESCE(MAX(exec_time_ms), 0) as max_cost_ms, COALESCE(AVG(exec_time_ms), 0) as avg_cost_ms FROM sqllogs ${whereClause}`;
     const countRes = await this.db.query<any>(countSql, params);
     const total = Number(countRes[0]?.total || 0);
+    const totalCostMs = Math.round(Number(countRes[0]?.total_cost_ms || 0));
+    const maxCostMs = Math.round(Number(countRes[0]?.max_cost_ms || 0));
+    const avgCostMs = Math.round(Number(countRes[0]?.avg_cost_ms || 0) * 100) / 100;
 
     const offset = (page - 1) * pageSize;
     const listSql = `
@@ -430,8 +440,11 @@ export class SqlDao {
     return {
       data,
       total,
-      totalCostMs: Math.round(Number(countRes[0]?.total_cost_ms || 0)),
-      maxCostMs: Math.round(Number(countRes[0]?.max_cost_ms || 0))
+      totalCostMs,
+      maxCostMs,
+      avgCostMs,
+      page,
+      pageSize
     };
   }
 }
