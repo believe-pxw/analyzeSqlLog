@@ -2,19 +2,24 @@
   "name": "parselog",
   "version": "1.1.0",
   "description": "极速全链路日志与性能分析器 (parselog CLI)",
-  "main": "index.js",
+  "main": "dist/index.js",
   "bin": {
-    "parselog": "./index.js"
+    "parselog": "./bin/parselog.js",
+    "sqllog": "./bin/parselog.js"
   },
   "files": [
-    "index.js",
-    "parser.js",
-    "db.js",
-    "server.js"
+    "bin",
+    "dist"
   ],
   "scripts": {
-    "start": "node index.js",
-    "test": "node --test test/*.test.js"
+    "start": "node bin/parselog.js",
+    "dev": "tsup --watch",
+    "build": "npm run build:web && npm run build:server",
+    "build:server": "tsup",
+    "build:web": "vite build --config web/vite.config.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:legacy": "node --test test/*.test.js"
   },
   "keywords": [
     "sql",
@@ -26,5 +31,15 @@
   "license": "ISC",
   "dependencies": {
     "duckdb": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "vue": "^3.5.41",
+    "vue-tsc": "^3.3.10"
   }
 }

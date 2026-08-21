@@ -1981,6 +1981,216 @@ test('43. 独立新增测试：Worker 多核并行解析通用应用日志 app_l
     assert.ok(traceIds.includes('t-w2'));
 });
 
+test('44. 独立新增测试：纯净日志透视 HTTP API /api/app-logs 与 /api/trace-spans 多维检索断言', async () => {
+    const http = require('http');
+    const db = new SqlLogDatabase();
+    await db.initSchema();
+
+    // 插入包含多 Trace、多 Span、不同 Level 与异常堆栈的 app_logs
+    const testLogs = [
+        {
+            log_time: '2026-08-20 10:00:00.100',
+            nano_time: '100',
+            level: 'INFO',
+            service_name: 'AuthService',
+            instance_name: 'p1:8089',
+            ip_address: '10.0.0.1',
+            host_name: 'node-1',
+            trace_id: 'trace-auth-001',
+            span_id: 'span-root',
+            parent_span_id: '-',
+            thread_name: 'http-nio-8080-exec-1',
+            logger_name: 'com.bokesoft.auth.LoginService',
+            message: 'User login attempt from IP 192.168.1.100',
+            stack_trace: null,
+            line_number: 10,
+            source_file: 'server-info.log'
+        },
+        {
+            log_time: '2026-08-20 10:00:00.200',
+            nano_time: '200',
+            level: 'WARN',
+            service_name: 'AuthService',
+            instance_name: 'p1:8089',
+            ip_address: '10.0.0.1',
+            host_name: 'node-1',
+            trace_id: 'trace-auth-001',
+            span_id: 'span-sub-1',
+            parent_span_id: 'span-root',
+            thread_name: 'http-nio-8080-exec-1',
+            logger_name: 'com.bokesoft.auth.TokenValidator',
+            message: 'Token near expiration: 5 minutes left',
+            stack_trace: null,
+            line_number: 15,
+            source_file: 'server-info.log'
+        },
+        {
+            log_time: '2026-08-20 10:00:00.300',
+            nano_time: '300',
+            level: 'ERROR',
+            service_name: 'AuthService',
+            instance_name: 'p1:8089',
+            ip_address: '10.0.0.1',
+            host_name: 'node-1',
+            trace_id: 'trace-auth-001',
+            span_id: 'span-sub-2',
+            parent_span_id: 'span-root',
+            thread_name: 'http-nio-8080-exec-1',
+            logger_name: 'com.bokesoft.auth.DbRealm',
+            message: 'Database query timeout while fetching user roles',
+            stack_trace: 'java.sql.SQLException: SocketTimeoutException\n\tat com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:129)\n\tat com.bokesoft.auth.DbRealm.getRoles(DbRealm.java:58)',
+            line_number: 22,
+            source_file: 'server-error.log'
+        },
+        {
+            log_time: '2026-08-20 10:00:01.000',
+            nano_time: '400',
+            level: 'INFO',
+            service_name: 'OrderService',
+            instance_name: 'p2:8089',
+            ip_address: '10.0.0.2',
+            host_name: 'node-2',
+            trace_id: 'trace-order-002',
+            span_id: 'span-order-1',
+            parent_span_id: '-',
+            thread_name: 'order-thread-1',
+            logger_name: 'com.bokesoft.order.CreateOrderService',
+            message: 'Order created successfully: ID=998877',
+            stack_trace: null,
+            line_number: 5,
+            source_file: 'server-info.log'
+        }
+    ];
+
+    await db.insertAppLogsBatch(testLogs);
+
+    // 启动 HTTP 服务
+    const server = createServer(db, { totalFiles: 1, totalLines: 100, totalRecords: 0, totalAppLogs: 4, costMs: 10 }, 0);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    try {
+        const httpGet = (urlPath) => new Promise((resolve, reject) => {
+            http.get(`http://localhost:${port}${urlPath}`, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+            }).on('error', reject);
+        });
+
+        // 1. 测试 /api/app-logs 全量查询
+        const rAll = await httpGet('/api/app-logs?page=1&pageSize=10');
+        assert.strictEqual(rAll.success, true);
+        assert.strictEqual(rAll.total, 4);
+        assert.strictEqual(rAll.data.length, 4);
+
+        // 2. 测试 /api/app-logs 按 TraceID 过滤
+        const rTrace = await httpGet('/api/app-logs?traceId=trace-auth-001');
+        assert.strictEqual(rTrace.success, true);
+        assert.strictEqual(rTrace.total, 3);
+        assert.strictEqual(rTrace.data.every(l => l.trace_id === 'trace-auth-001'), true);
+
+        // 3. 测试 /api/app-logs 按 Level 过滤
+        const rError = await httpGet('/api/app-logs?traceId=trace-auth-001&level=ERROR');
+        assert.strictEqual(rError.success, true);
+        assert.strictEqual(rError.total, 1);
+        assert.strictEqual(rError.data[0].level, 'ERROR');
+        assert.ok(rError.data[0].stack_trace.includes('SocketTimeoutException'));
+
+        // 4. 测试 /api/app-logs 按 关键词 过滤
+        const rKw = await httpGet('/api/app-logs?keyword=Token');
+        assert.strictEqual(rKw.success, true);
+        assert.strictEqual(rKw.total, 1);
+        assert.ok(rKw.data[0].message.includes('Token near expiration'));
+
+        // 5. 测试 /api/trace-spans 获取指定 Trace 下所有 Span 列表及错误数聚合
+        const rSpans = await httpGet('/api/trace-spans?traceId=trace-auth-001');
+        assert.strictEqual(rSpans.success, true);
+        assert.strictEqual(rSpans.traceId, 'trace-auth-001');
+        assert.strictEqual(rSpans.data.length, 3);
+        
+        const errorSpan = rSpans.data.find(s => s.span_id === 'span-sub-2');
+        assert.ok(errorSpan);
+        assert.strictEqual(errorSpan.log_count, 1);
+        assert.strictEqual(errorSpan.error_count, 1);
+
+    } finally {
+        server.close();
+    }
+});
+
+test('45. 独立新增测试：校验前端【📜 纯净日志透视】面板 DOM 结构与 JavaScript 函数在沙箱中正常执行', () => {
+    const { getDashboardHtml } = require('../server');
+    const html = getDashboardHtml();
+
+    // 1. 验证关键 Tab 与面板 DOM 结构
+    assert.ok(html.includes('data-tab="app-logs"'), '应包含 data-tab="app-logs" 按钮');
+    assert.ok(html.includes('id="panel-app-logs"'), '应包含 id="panel-app-logs" 容器');
+    assert.ok(html.includes('id="inp-applog-trace-id"'), '应包含 Trace 检索框');
+    assert.ok(html.includes('id="select-applog-span"'), '应包含 Span 跨度下拉框');
+    assert.ok(html.includes('id="select-applog-level"'), '应包含 Level 选择器');
+    assert.ok(html.includes('id="search-applog-keyword"'), '应包含关键词检索框');
+    assert.ok(html.includes('id="applog-tbody"'), '应包含日志列表 tbody');
+    assert.ok(html.includes('id="applog-span-strip"'), '应包含 Span 跨度导航条');
+
+    // 2. 验证内嵌 script 中包含的关键透视控制函数
+    const scriptStart = html.indexOf('<script>') + 8;
+    const scriptEnd = html.indexOf('</script>');
+    const jsCode = html.slice(scriptStart, scriptEnd);
+
+    assert.ok(jsCode.includes('function loadAppLogs'), '应包含 loadAppLogs 函数');
+    assert.ok(jsCode.includes('function filterAppLogsBySpan'), '应包含 filterAppLogsBySpan 函数');
+    assert.ok(jsCode.includes('function filterAppLogsByLevel'), '应包含 filterAppLogsByLevel 函数');
+    assert.ok(jsCode.includes('function toggleAllAppLogStacks'), '应包含 toggleAllAppLogStacks 函数');
+    assert.ok(jsCode.includes('function toggleAppLogStack'), '应包含 toggleAppLogStack 函数');
+    assert.ok(jsCode.includes('function copyCurrentTraceLogs'), '应包含 copyCurrentTraceLogs 函数');
+    assert.ok(jsCode.includes('function exportCurrentTraceLogs'), '应包含 exportCurrentTraceLogs 函数');
+    assert.ok(jsCode.includes('function jumpToAppLogs'), '应包含跨模块跳转 jumpToAppLogs 函数');
+
+    // 3. 在 Node vm 沙箱中验证语法与基础渲染逻辑
+    const vm = require('vm');
+    let toastMessage = '';
+    const mockDocument = {
+        getElementById: (id) => ({
+            value: '',
+            innerText: '',
+            innerHTML: '',
+            style: {},
+            classList: { add: () => {}, remove: () => {} },
+            addEventListener: () => {}
+        }),
+        querySelectorAll: () => [],
+        createElement: (tag) => ({
+            href: '',
+            download: '',
+            click: () => {}
+        }),
+        body: { appendChild: () => {}, removeChild: () => {} }
+    };
+
+    const sandbox = {
+        document: mockDocument,
+        window: { location: { search: '' } },
+        navigator: { clipboard: { writeText: async (t) => { toastMessage = t; } } },
+        URL: { createObjectURL: () => 'blob:mock', revokeObjectURL: () => {} },
+        Blob: class { constructor(parts) { this.parts = parts; } },
+        console: console,
+        setTimeout: (fn) => fn(),
+        clearTimeout: () => {}
+    };
+
+    const script = new vm.Script(jsCode);
+    const context = vm.createContext(sandbox);
+    script.runInContext(context);
+
+    // 验证沙箱内 switchTab 正常执行无报错
+    assert.strictEqual(typeof sandbox.switchTab, 'function');
+    sandbox.switchTab('app-logs', true);
+    assert.strictEqual(sandbox.currentTabName, 'app-logs');
+});
+
+
+
 
 
 
