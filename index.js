@@ -49,6 +49,9 @@ async function main() {
     let perfBatch = [];
     const PERF_BATCH_SIZE = 50;
 
+    let appLogBatch = [];
+    const APP_LOG_BATCH_SIZE = 5000;
+
     // 流式解析并批量写入 DuckDB (微任务 0 开销优化)
     const parseResult = await parseLogs(
         targetPath,
@@ -67,6 +70,14 @@ async function main() {
                 perfBatch = [];
                 return db.insertPerfBatch(toInsert);
             }
+        },
+        (appLog) => {
+            appLogBatch.push(appLog);
+            if (appLogBatch.length >= APP_LOG_BATCH_SIZE) {
+                const toInsert = appLogBatch;
+                appLogBatch = [];
+                return db.insertAppLogsBatch(toInsert);
+            }
         }
     );
 
@@ -75,6 +86,9 @@ async function main() {
     }
     if (perfBatch.length > 0) {
         await db.insertPerfBatch(perfBatch);
+    }
+    if (appLogBatch.length > 0) {
+        await db.insertAppLogsBatch(appLogBatch);
     }
 
     const costMs = Date.now() - startTime;
@@ -88,6 +102,9 @@ async function main() {
     console.log(`• 结构化 SQL 记录: ${parseResult.totalRecords.toLocaleString()} 条`);
     if (parseResult.totalPerfTraces > 0) {
         console.log(`• 性能剖析树 (ActionRecorder): ${parseResult.totalPerfTraces.toLocaleString()} 笔完整请求`);
+    }
+    if (parseResult.totalAppLogs > 0) {
+        console.log(`• 全量应用日志记录: ${parseResult.totalAppLogs.toLocaleString()} 条`);
     }
 
     // 启动 Web 控制台 (端口自动容错递增)

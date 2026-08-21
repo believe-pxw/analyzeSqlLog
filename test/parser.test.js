@@ -1772,6 +1772,216 @@ test('38. 独立新增测试：性能链路树自耗时 (Self Time) 动态过滤
     assert.strictEqual(mockDomMap['inp-perf-self-time'].value, '', '收起后自耗时输入框应清空');
 });
 
+test('39. 独立新增测试：parseLogHeader 对照 LOG_FORMAT_SPEC.md 标准规范样例 13 维元数据精确解析断言', () => {
+    const { parseLogHeader, isLogHeader } = require('../parser');
+
+    const sampleLog = '2026-08-20 09:59:15.894 8722201732575698 INFO [DevNode] [011682c72bab4d12b91de2e07887d66c-5ff5ffbcc6-8nk2q:8089] [10.233.107.109] [011682c72bab4d12b91de2e07887d66c-5ff5ffbcc6-8nk2q] [c8JR5yiv6kFEiRc_7rUzJ-1787191155419] [u67dkopl1704388ocwf3vny-6737] [-] [http-nio-8089-exec-5] com.bokesoft.yigo.mid.service.provider.ServiceProviderFactory 服务清单hashCode: 6d03eba6, values=DictService';
+
+    assert.strictEqual(isLogHeader(sampleLog), true);
+
+    const parsed = parseLogHeader(sampleLog);
+    assert.strictEqual(parsed.logTime, '2026-08-20 09:59:15.894', 'Time 字段必须精确提取');
+    assert.strictEqual(parsed.nanoTime, '8722201732575698', 'NanoTime 高精度时钟序号必须提取');
+    assert.strictEqual(parsed.level, 'INFO', 'Level 级别必须提取');
+    assert.strictEqual(parsed.serviceName, 'DevNode', 'ServiceName [方括号 1] 必须提取');
+    assert.strictEqual(parsed.instanceName, '011682c72bab4d12b91de2e07887d66c-5ff5ffbcc6-8nk2q:8089', 'InstanceName [方括号 2] 必须提取');
+    assert.strictEqual(parsed.ipAddress, '10.233.107.109', 'IpAddress [方括号 3] 必须提取');
+    assert.strictEqual(parsed.hostName, '011682c72bab4d12b91de2e07887d66c-5ff5ffbcc6-8nk2q', 'HostName [方括号 4] 必须提取');
+    assert.strictEqual(parsed.traceId, 'c8JR5yiv6kFEiRc_7rUzJ-1787191155419', 'TraceId [方括号 5] 必须提取');
+    assert.strictEqual(parsed.spanId, 'u67dkopl1704388ocwf3vny-6737', 'SpanId [方括号 6] 必须提取');
+    assert.strictEqual(parsed.parentSpanId, '-', 'ParentSpanId [方括号 7] 必须提取');
+    assert.strictEqual(parsed.threadName, 'http-nio-8089-exec-5', 'Thread [方括号 8] 必须提取');
+    assert.strictEqual(parsed.loggerName, 'com.bokesoft.yigo.mid.service.provider.ServiceProviderFactory', 'LoggerName 类名必须提取');
+    assert.strictEqual(parsed.message, '服务清单hashCode: 6d03eba6, values=DictService', 'Msg 日志正文必须提取');
+});
+
+test('40. 独立新增测试：parseLogHeader 对旧格式日志与缺省方括号的安全兼容容错断言', () => {
+    const { parseLogHeader, isLogHeader } = require('../parser');
+
+    // 旧格式 1：无 nanoTime，直接为 level
+    const legacyLog1 = '2026-08-12 10:00:00.000 INFO [DevNode] [] [] [] [t-legacy-1] [] [] [w-1] com.bokesoft.TestClass 业务执行成功';
+    assert.strictEqual(isLogHeader(legacyLog1), true);
+    const parsed1 = parseLogHeader(legacyLog1);
+    assert.strictEqual(parsed1.logTime, '2026-08-12 10:00:00.000');
+    assert.strictEqual(parsed1.level, 'INFO');
+    assert.strictEqual(parsed1.serviceName, 'DevNode');
+    assert.strictEqual(parsed1.traceId, 't-legacy-1');
+    assert.strictEqual(parsed1.threadName, 'w-1');
+    assert.strictEqual(parsed1.loggerName, 'com.bokesoft.TestClass');
+    assert.strictEqual(parsed1.message, '业务执行成功');
+
+    // 格式 2：方括号不足 8 个
+    const shortLog = '2026-08-12 10:00:00.000 ERROR [DevNode] [instance-1] [192.168.1.1] 出现全局异常';
+    const parsed2 = parseLogHeader(shortLog);
+    assert.strictEqual(parsed2.level, 'ERROR');
+    assert.strictEqual(parsed2.serviceName, 'DevNode');
+    assert.strictEqual(parsed2.instanceName, 'instance-1');
+    assert.strictEqual(parsed2.ipAddress, '192.168.1.1');
+    assert.strictEqual(parsed2.traceId, '-');
+});
+
+test('41. 独立新增测试：parseLogFile 配合 onAppLog 流式解析全量应用日志与多行堆栈断言', async () => {
+    const sampleLogs = [
+        '2026-08-20 09:59:15.894 8722201732575698 INFO [DevNode] [pod-1:8089] [10.0.0.1] [host-1] [trace-app-1] [span-1] [-] [http-1] com.bokesoft.service.AuthService 用户登录成功 user=admin',
+        '2026-08-20 09:59:16.100 8722201732579999 ERROR [DevNode] [pod-1:8089] [10.0.0.1] [host-1] [trace-app-1] [span-2] [span-1] [http-1] com.bokesoft.service.OrderService 处理订单发生异常 orderId=1001',
+        '>java.lang.NullPointerException: Order item cannot be null',
+        '>\tat com.bokesoft.service.OrderService.process(OrderService.java:45)',
+        '>\tat com.bokesoft.service.OrderService.doOrder(OrderService.java:20)',
+        '2026-08-20 09:59:17.000 8722201732588888 INFO [DevNode] [pod-1:8089] [10.0.0.1] [host-1] [trace-app-2] [span-3] [-] [http-2] com.bokesoft.service.DictService 加载字典完成'
+    ].join('\n');
+
+    const tempFile = path.join(__dirname, 'test_app_logs_temp.log');
+    fs.writeFileSync(tempFile, sampleLogs, 'utf-8');
+
+    const appLogs = [];
+    const parseResult = await parseLogFile(tempFile, () => {}, 0, null, (log) => {
+        appLogs.push(log);
+    });
+
+    fs.unlinkSync(tempFile);
+
+    assert.strictEqual(parseResult.totalAppLogs, 3);
+    assert.strictEqual(appLogs.length, 3);
+
+    // 第一条
+    assert.strictEqual(appLogs[0].trace_id, 'trace-app-1');
+    assert.strictEqual(appLogs[0].span_id, 'span-1');
+    assert.strictEqual(appLogs[0].level, 'INFO');
+    assert.strictEqual(appLogs[0].message, '用户登录成功 user=admin');
+
+    // 第二条 (包含多行堆栈)
+    assert.strictEqual(appLogs[1].trace_id, 'trace-app-1');
+    assert.strictEqual(appLogs[1].span_id, 'span-2');
+    assert.strictEqual(appLogs[1].parent_span_id, 'span-1');
+    assert.strictEqual(appLogs[1].level, 'ERROR');
+    assert.ok(appLogs[1].message.includes('处理订单发生异常 orderId=1001'));
+    assert.ok(appLogs[1].message.includes('NullPointerException'));
+    assert.ok(appLogs[1].message.includes('OrderService.java:45'));
+
+    // 第三条
+    assert.strictEqual(appLogs[2].trace_id, 'trace-app-2');
+    assert.strictEqual(appLogs[2].message, '加载字典完成');
+});
+
+test('42. 独立新增测试：DuckDB app_logs 批量导入与按 TraceID/SpanID/Level 多维过滤检索断言', async () => {
+    const db = new SqlLogDatabase(':memory:');
+    await db.initSchema();
+
+    await db.insertAppLogsBatch([
+        {
+            id: 1,
+            log_time: '2026-08-20 09:00:00.000',
+            nano_time: '1000001',
+            level: 'INFO',
+            service_name: 'DevNode',
+            instance_name: 'pod-1:8089',
+            ip_address: '10.0.0.1',
+            host_name: 'host-1',
+            trace_id: 't-target-1',
+            span_id: 's-root',
+            parent_span_id: '-',
+            thread_name: 'th-1',
+            logger_name: 'com.bokesoft.Start',
+            message: '开始处理',
+            line_number: 1,
+            source_file: 'app.log'
+        },
+        {
+            id: 2,
+            log_time: '2026-08-20 09:00:01.000',
+            nano_time: '1000002',
+            level: 'ERROR',
+            service_name: 'DevNode',
+            instance_name: 'pod-1:8089',
+            ip_address: '10.0.0.1',
+            host_name: 'host-1',
+            trace_id: 't-target-1',
+            span_id: 's-sub-1',
+            parent_span_id: 's-root',
+            thread_name: 'th-1',
+            logger_name: 'com.bokesoft.Worker',
+            message: '处理过程中发生严重数据库超时异常',
+            line_number: 2,
+            source_file: 'app.log'
+        },
+        {
+            id: 3,
+            log_time: '2026-08-20 09:00:02.000',
+            nano_time: '1000003',
+            level: 'INFO',
+            service_name: 'DevNode',
+            instance_name: 'pod-2:8089',
+            ip_address: '10.0.0.2',
+            host_name: 'host-2',
+            trace_id: 't-other',
+            span_id: 's-other',
+            parent_span_id: '-',
+            thread_name: 'th-2',
+            logger_name: 'com.bokesoft.Heartbeat',
+            message: '心跳正常',
+            line_number: 10,
+            source_file: 'app.log'
+        }
+    ]);
+
+    // 1. 按 TraceID 精确检索
+    const traceLogs = await db.getAppLogs(1, 50, { traceId: 't-target-1' });
+    assert.strictEqual(traceLogs.total, 2);
+    assert.strictEqual(traceLogs.rows.length, 2);
+    assert.strictEqual(traceLogs.rows[0].span_id, 's-root');
+    assert.strictEqual(traceLogs.rows[1].span_id, 's-sub-1');
+
+    // 2. 按 SpanID 检索
+    const spanLogs = await db.getAppLogs(1, 50, { spanId: 's-sub-1' });
+    assert.strictEqual(spanLogs.total, 1);
+    assert.strictEqual(spanLogs.rows[0].level, 'ERROR');
+
+    // 3. 按 Level 过滤
+    const errorLogs = await db.getAppLogs(1, 50, { level: 'ERROR' });
+    assert.strictEqual(errorLogs.total, 1);
+    assert.strictEqual(errorLogs.rows[0].trace_id, 't-target-1');
+
+    // 4. 关键词模糊检索
+    const kwLogs = await db.getAppLogs(1, 50, { keyword: '超时异常' });
+    assert.strictEqual(kwLogs.total, 1);
+    assert.strictEqual(kwLogs.rows[0].id, 2);
+});
+
+test('43. 独立新增测试：Worker 多核并行解析通用应用日志 app_logs 正确性断言', async () => {
+    const tempDir = path.join(__dirname, 'test_worker_app_logs_dir');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+
+    const f1 = path.join(tempDir, 'w1-server-info.log');
+    const f2 = path.join(tempDir, 'w2-server-error.log');
+
+    fs.writeFileSync(f1, '2026-08-20 10:00:00.000 100 INFO [DevNode] [p1:8089] [10.0.0.1] [h1] [t-w1] [s-w1] [-] [th-1] com.bokesoft.S1 日志来自文件1\n>SQL执行信息:影响行数:[1 rows] 执行时间:[5ms]\n>SQL语句:[select 1]', 'utf-8');
+    fs.writeFileSync(f2, '2026-08-20 10:00:01.000 200 ERROR [DevNode] [p2:8089] [10.0.0.2] [h2] [t-w2] [s-w2] [-] [th-2] com.bokesoft.S2 日志来自文件2\n>SQL执行信息:影响行数:[1 rows] 执行时间:[10ms]\n>SQL语句:[select 2]', 'utf-8');
+
+    const appLogs = [];
+    const sqlRecords = [];
+
+    const res = await parseLogs(
+        tempDir,
+        (r) => sqlRecords.push(r),
+        null,
+        (appLog) => appLogs.push(appLog)
+    );
+
+    fs.unlinkSync(f1);
+    fs.unlinkSync(f2);
+    fs.rmdirSync(tempDir);
+
+    assert.strictEqual(res.totalFiles, 2);
+    assert.strictEqual(sqlRecords.length, 2);
+    assert.strictEqual(appLogs.length, 2);
+    assert.strictEqual(res.totalAppLogs, 2);
+
+    const traceIds = appLogs.map(l => l.trace_id);
+    assert.ok(traceIds.includes('t-w1'));
+    assert.ok(traceIds.includes('t-w2'));
+});
+
+
 
 
 

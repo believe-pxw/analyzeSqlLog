@@ -24,6 +24,7 @@ class SqlLogDatabase {
         this._lastId = 0;
         this._lastPerfTraceId = 0;
         this._lastPerfActionId = 0;
+        this._lastAppLogId = 0;
     }
 
     /**
@@ -34,8 +35,17 @@ class SqlLogDatabase {
             CREATE TABLE IF NOT EXISTS sqllogs (
                 id BIGINT PRIMARY KEY,
                 log_time VARCHAR,
+                nano_time VARCHAR,
+                level VARCHAR,
+                service_name VARCHAR,
+                instance_name VARCHAR,
+                ip_address VARCHAR,
+                host_name VARCHAR,
                 trace_id VARCHAR,
+                span_id VARCHAR,
+                parent_span_id VARCHAR,
                 thread_name VARCHAR,
+                logger_name VARCHAR,
                 exec_time_ms DOUBLE,
                 result_rows INT,
                 db_manager VARCHAR,
@@ -47,6 +57,29 @@ class SqlLogDatabase {
             );
             CREATE INDEX IF NOT EXISTS idx_trace_id ON sqllogs(trace_id);
             CREATE INDEX IF NOT EXISTS idx_exec_time ON sqllogs(exec_time_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS app_logs (
+                id BIGINT PRIMARY KEY,
+                log_time VARCHAR,
+                nano_time VARCHAR,
+                level VARCHAR,
+                service_name VARCHAR,
+                instance_name VARCHAR,
+                ip_address VARCHAR,
+                host_name VARCHAR,
+                trace_id VARCHAR,
+                span_id VARCHAR,
+                parent_span_id VARCHAR,
+                thread_name VARCHAR,
+                logger_name VARCHAR,
+                message VARCHAR,
+                line_number INT,
+                source_file VARCHAR
+            );
+            CREATE INDEX IF NOT EXISTS idx_app_trace_id ON app_logs(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_app_span_id ON app_logs(span_id);
+            CREATE INDEX IF NOT EXISTS idx_app_level ON app_logs(level);
+            CREATE INDEX IF NOT EXISTS idx_app_log_time ON app_logs(log_time);
 
             CREATE TABLE IF NOT EXISTS perf_traces (
                 id BIGINT PRIMARY KEY,
@@ -132,8 +165,17 @@ class SqlLogDatabase {
             const normalized = records.map(r => ({
                 id: (r.id !== undefined && r.id !== null) ? Number(r.id) : ++this._lastId,
                 log_time: r.log_time || '',
+                nano_time: r.nano_time || '',
+                level: r.level || 'INFO',
+                service_name: r.service_name || '-',
+                instance_name: r.instance_name || '-',
+                ip_address: r.ip_address || '-',
+                host_name: r.host_name || '-',
                 trace_id: r.trace_id || '-',
+                span_id: r.span_id || '-',
+                parent_span_id: r.parent_span_id || '-',
                 thread_name: r.thread_name || '-',
+                logger_name: r.logger_name || '',
                 exec_time_ms: Number(r.exec_time_ms) || 0,
                 result_rows: Number(r.result_rows) || 0,
                 db_manager: r.db_manager || '',
@@ -151,8 +193,17 @@ class SqlLogDatabase {
                 SELECT 
                     id::BIGINT,
                     log_time::VARCHAR,
+                    nano_time::VARCHAR,
+                    level::VARCHAR,
+                    service_name::VARCHAR,
+                    instance_name::VARCHAR,
+                    ip_address::VARCHAR,
+                    host_name::VARCHAR,
                     trace_id::VARCHAR,
+                    span_id::VARCHAR,
+                    parent_span_id::VARCHAR,
                     thread_name::VARCHAR,
+                    logger_name::VARCHAR,
                     exec_time_ms::DOUBLE,
                     result_rows::INT,
                     db_manager::VARCHAR,
@@ -169,6 +220,161 @@ class SqlLogDatabase {
                 if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
             } catch (e) {}
         }
+    }
+
+    /**
+     * 🚀 批量插入通用应用日志 (App Logs)
+     */
+    async insertAppLogsBatch(records) {
+        if (!records || records.length === 0) return;
+
+        return new Promise((resolve, reject) => {
+            this.insertChain = this.insertChain.then(async () => {
+                try {
+                    await this._doInsertAppLogsBatch(records);
+                    resolve();
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        });
+    }
+
+    async _doInsertAppLogsBatch(records) {
+        if (!records || records.length === 0) return;
+
+        const tmpPath = path.join(os.tmpdir(), `app_logs_batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.json`);
+        try {
+            const normalized = records.map(r => ({
+                id: (r.id !== undefined && r.id !== null) ? Number(r.id) : ++this._lastAppLogId,
+                log_time: r.log_time || '',
+                nano_time: r.nano_time || '',
+                level: r.level || 'INFO',
+                service_name: r.service_name || '-',
+                instance_name: r.instance_name || '-',
+                ip_address: r.ip_address || '-',
+                host_name: r.host_name || '-',
+                trace_id: r.trace_id || '-',
+                span_id: r.span_id || '-',
+                parent_span_id: r.parent_span_id || '-',
+                thread_name: r.thread_name || '-',
+                logger_name: r.logger_name || '',
+                message: r.message || '',
+                line_number: Number(r.line_number) || 0,
+                source_file: r.source_file || ''
+            }));
+
+            fs.writeFileSync(tmpPath, JSON.stringify(normalized));
+            const safeTmpPath = tmpPath.replace(/\\/g, '/');
+            const insertSql = `
+                INSERT INTO app_logs 
+                SELECT 
+                    id::BIGINT,
+                    log_time::VARCHAR,
+                    nano_time::VARCHAR,
+                    level::VARCHAR,
+                    service_name::VARCHAR,
+                    instance_name::VARCHAR,
+                    ip_address::VARCHAR,
+                    host_name::VARCHAR,
+                    trace_id::VARCHAR,
+                    span_id::VARCHAR,
+                    parent_span_id::VARCHAR,
+                    thread_name::VARCHAR,
+                    logger_name::VARCHAR,
+                    message::VARCHAR,
+                    line_number::INT,
+                    source_file::VARCHAR
+                FROM read_json_auto('${safeTmpPath}');
+            `;
+            await this.query(insertSql);
+        } finally {
+            try {
+                if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+            } catch (e) {}
+        }
+    }
+
+    /**
+     * 🔍 通用应用日志检索与纯净 Trace/Span 过滤
+     */
+    async getAppLogs(page = 1, pageSize = 50, filters = {}) {
+        let whereClause = 'WHERE 1=1';
+        const params = [];
+
+        if (filters.traceId) {
+            whereClause += ' AND trace_id = ?';
+            params.push(filters.traceId);
+        }
+        if (filters.spanId) {
+            whereClause += ' AND span_id = ?';
+            params.push(filters.spanId);
+        }
+        if (filters.level) {
+            whereClause += ' AND level = ?';
+            params.push(filters.level.toUpperCase());
+        }
+        if (filters.serviceName) {
+            whereClause += ' AND service_name ILIKE ?';
+            params.push(`%${filters.serviceName}%`);
+        }
+        if (filters.loggerName) {
+            whereClause += ' AND logger_name ILIKE ?';
+            params.push(`%${filters.loggerName}%`);
+        }
+        if (filters.keyword) {
+            whereClause += ' AND (message ILIKE ? OR logger_name ILIKE ?)';
+            params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
+        }
+
+        const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
+        const countRows = await this.query(countSql, params);
+        const total = countRows[0] ? Number(countRows[0].total) : 0;
+
+        const offset = (page - 1) * pageSize;
+        const sql = `
+            SELECT 
+                id,
+                log_time,
+                nano_time,
+                level,
+                service_name,
+                instance_name,
+                ip_address,
+                host_name,
+                trace_id,
+                span_id,
+                parent_span_id,
+                thread_name,
+                logger_name,
+                message,
+                line_number,
+                source_file
+            FROM app_logs
+            ${whereClause}
+            ORDER BY log_time ASC, id ASC
+            LIMIT ? OFFSET ?
+        `;
+        const rows = await this.query(sql, [...params, pageSize, offset]);
+        const mappedRows = rows.map(r => ({
+            id: Number(r.id),
+            log_time: r.log_time,
+            nano_time: r.nano_time,
+            level: r.level,
+            service_name: r.service_name,
+            instance_name: r.instance_name,
+            ip_address: r.ip_address,
+            host_name: r.host_name,
+            trace_id: r.trace_id,
+            span_id: r.span_id,
+            parent_span_id: r.parent_span_id,
+            thread_name: r.thread_name,
+            logger_name: r.logger_name,
+            message: r.message,
+            line_number: Number(r.line_number || 0),
+            source_file: r.source_file || ''
+        }));
+        return { rows: mappedRows, total, page, pageSize };
     }
 
     /**

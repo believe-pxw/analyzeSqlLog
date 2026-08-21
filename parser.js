@@ -40,35 +40,118 @@ function isLogHeader(line) {
 }
 
 /**
- * 高性能从日志 Header 行中提取 时间、TraceID、线程名
+ * 高性能从日志 Header 行中提取标准 13 维元数据 (依据 LOG_FORMAT_SPEC.md 规范)
+ * 格式: Time NanoTime Level [ServiceName] [InstanceName] [IpAddress] [HostName] [TraceId] [SpanId] [ParentSpanId] [Thread] LoggerName Msg
  */
 function parseLogHeader(line) {
-    const logTime = line.length >= 23 ? line.substring(0, 23) : line;
+    const len = line.length;
+    const logTime = len >= 23 ? line.substring(0, 23) : line;
+    let nanoTime = '';
+    let level = 'INFO';
+    let serviceName = '-';
+    let instanceName = '-';
+    let ipAddress = '-';
+    let hostName = '-';
     let traceId = '-';
     let spanId = '-';
+    let parentSpanId = '-';
     let threadName = '-';
+    let loggerName = '';
+    let message = '';
+
+    let firstBracketIdx = -1;
     let bracketCount = 0;
     let start = -1;
+    let lastBracketCloseIdx = -1;
 
-    for (let i = 0; i < line.length; i++) {
+    for (let i = 23; i < len; i++) {
         const c = line.charCodeAt(i);
         if (c === 91) { // '['
+            if (firstBracketIdx === -1) firstBracketIdx = i;
             start = i + 1;
         } else if (c === 93 && start !== -1) { // ']'
             bracketCount++;
-            if (bracketCount === 5) {
-                traceId = line.substring(start, i);
+            const val = line.substring(start, i);
+            if (bracketCount === 1) {
+                serviceName = val;
+            } else if (bracketCount === 2) {
+                instanceName = val;
+            } else if (bracketCount === 3) {
+                ipAddress = val;
+            } else if (bracketCount === 4) {
+                hostName = val;
+            } else if (bracketCount === 5) {
+                traceId = val;
             } else if (bracketCount === 6) {
-                spanId = line.substring(start, i);
+                spanId = val;
+            } else if (bracketCount === 7) {
+                parentSpanId = val;
             } else if (bracketCount === 8) {
-                threadName = line.substring(start, i);
+                threadName = val;
+                lastBracketCloseIdx = i;
                 break;
             }
             start = -1;
         }
     }
 
-    return { logTime, traceId, spanId, threadName };
+    // 容错：如果方括号在索引 23 之前（极端非标准格式）
+    if (firstBracketIdx === -1) {
+        firstBracketIdx = line.indexOf('[');
+    }
+
+    if (firstBracketIdx > 23) {
+        let p = 23;
+        while (p < firstBracketIdx && line.charCodeAt(p) === 32) p++;
+        let endP = firstBracketIdx - 1;
+        while (endP > p && line.charCodeAt(endP) === 32) endP--;
+
+        if (p <= endP) {
+            const middle = line.substring(p, endP + 1);
+            const spaceIdx = middle.indexOf(' ');
+            if (spaceIdx === -1) {
+                level = middle;
+            } else {
+                nanoTime = middle.substring(0, spaceIdx);
+                let p2 = spaceIdx + 1;
+                while (p2 < middle.length && middle.charCodeAt(p2) === 32) p2++;
+                level = middle.substring(p2);
+            }
+        }
+    }
+
+    if (lastBracketCloseIdx !== -1 && lastBracketCloseIdx < len - 1) {
+        let startPos = lastBracketCloseIdx + 1;
+        while (startPos < len && line.charCodeAt(startPos) === 32) startPos++;
+        if (startPos < len) {
+            const spaceIdx = line.indexOf(' ', startPos);
+            if (spaceIdx !== -1) {
+                loggerName = line.substring(startPos, spaceIdx);
+                let msgStart = spaceIdx + 1;
+                while (msgStart < len && line.charCodeAt(msgStart) === 32) msgStart++;
+                message = line.substring(msgStart);
+            } else {
+                loggerName = line.substring(startPos);
+                message = '';
+            }
+        }
+    }
+
+    return {
+        logTime,
+        nanoTime,
+        level,
+        serviceName,
+        instanceName,
+        ipAddress,
+        hostName,
+        traceId,
+        spanId,
+        parentSpanId,
+        threadName,
+        loggerName,
+        message
+    };
 }
 
 /**
@@ -114,13 +197,14 @@ function parseActionLine(line) {
 }
 
 /**
- * 极速流式日志解析器 (同时支持 SQL 日志与 ActionRecorder 性能日志)
+ * 极速流式日志解析器 (同时支持 SQL 日志、ActionRecorder 性能日志与通用应用日志)
  * @param {string} filePath - 日志文件路径
  * @param {Function} onRecord - 解析到完整 SQL 记录时的回调函数
  * @param {number} startRecordId - 起始 ID 偏移量
  * @param {Function} onPerfTrace - 解析到完整 Performance Trace 树时的回调函数
+ * @param {Function} onAppLog - 解析到完整通用应用日志记录时的回调函数
  */
-async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace = null) {
+async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace = null, onAppLog = null) {
     let inputStream;
     if (filePath.endsWith('.gz')) {
         inputStream = fs.createReadStream(filePath).pipe(zlib.createGunzip());
@@ -136,10 +220,26 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
     let totalLines = 0;
     let totalRecords = startRecordId;
     let totalPerfTraces = 0;
+    let totalAppLogs = 0;
 
     let currentRecord = null;
+    let currentAppLog = null;
     let captureState = null; // 'sql_template' | 'full_sql' | null
-    let lastHeaderInfo = { logTime: '', traceId: '-', spanId: '-', threadName: '-' };
+    let lastHeaderInfo = {
+        logTime: '',
+        nanoTime: '',
+        level: 'INFO',
+        serviceName: '-',
+        instanceName: '-',
+        ipAddress: '-',
+        hostName: '-',
+        traceId: '-',
+        spanId: '-',
+        parentSpanId: '-',
+        threadName: '-',
+        loggerName: '',
+        message: ''
+    };
 
     // Performance ActionRecorder 状态机
     let inPerfBlock = false;
@@ -182,14 +282,33 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
             if (currentRecord.sql_template || currentRecord.full_sql) {
                 totalRecords++;
                 currentRecord.id = totalRecords;
-                const res = onRecord(currentRecord);
-                if (res && typeof res.then === 'function') {
-                    await res;
+                if (onRecord) {
+                    const res = onRecord(currentRecord);
+                    if (res && typeof res.then === 'function') {
+                        await res;
+                    }
                 }
             }
         }
         currentRecord = null;
         captureState = null;
+    }
+
+    async function flushAppLog() {
+        if (currentAppLog) {
+            if (currentAppLog.message) {
+                currentAppLog.message = cleanSqlText(currentAppLog.message);
+            }
+            totalAppLogs++;
+            currentAppLog.id = totalAppLogs;
+            if (onAppLog) {
+                const res = onAppLog(currentAppLog);
+                if (res && typeof res.then === 'function') {
+                    await res;
+                }
+            }
+            currentAppLog = null;
+        }
     }
 
     async function flushPerfTrace() {
@@ -271,11 +390,33 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
 
         // 极速判断 Header
         if (isLogHeader(line)) {
-            // 一旦遇到任何新日志 Header，必然刷新闭合前一条 SQL 记录
+            // 一旦遇到任何新日志 Header，必然刷新闭合前一条 SQL 记录与通用应用日志
             await flushCurrent();
+            await flushAppLog();
 
             // 无论任何类名的 Header，都记忆更新最近的 Header 上下文
             lastHeaderInfo = parseLogHeader(line);
+
+            if (onAppLog) {
+                currentAppLog = {
+                    id: 0,
+                    log_time: lastHeaderInfo.logTime,
+                    nano_time: lastHeaderInfo.nanoTime,
+                    level: lastHeaderInfo.level,
+                    service_name: lastHeaderInfo.serviceName,
+                    instance_name: lastHeaderInfo.instanceName,
+                    ip_address: lastHeaderInfo.ipAddress,
+                    host_name: lastHeaderInfo.hostName,
+                    trace_id: lastHeaderInfo.traceId,
+                    span_id: lastHeaderInfo.spanId,
+                    parent_span_id: lastHeaderInfo.parentSpanId,
+                    thread_name: lastHeaderInfo.threadName,
+                    logger_name: lastHeaderInfo.loggerName,
+                    message: lastHeaderInfo.message,
+                    line_number: totalLines,
+                    source_file: path.resolve(filePath)
+                };
+            }
 
             // 判断是否是 ActionRecorder 性能日志
             if (line.includes('com.bokesoft.erp.performance.ActionRecorder')) {
@@ -322,8 +463,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
                 currentRecord = {
                     id: 0,
                     log_time: lastHeaderInfo.logTime,
+                    nano_time: lastHeaderInfo.nanoTime,
+                    level: lastHeaderInfo.level,
+                    service_name: lastHeaderInfo.serviceName,
+                    instance_name: lastHeaderInfo.instanceName,
+                    ip_address: lastHeaderInfo.ipAddress,
+                    host_name: lastHeaderInfo.hostName,
                     trace_id: lastHeaderInfo.traceId,
+                    span_id: lastHeaderInfo.spanId,
+                    parent_span_id: lastHeaderInfo.parentSpanId,
                     thread_name: lastHeaderInfo.threadName,
+                    logger_name: lastHeaderInfo.loggerName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -381,14 +531,28 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
             }
         }
 
+        // 追加多行 AppLog 文本 (如异常堆栈)
+        if (currentAppLog && !inPerfBlock) {
+            currentAppLog.message += (currentAppLog.message ? '\n' : '') + line;
+        }
+
         // ==================== SQL 记录行解析 ====================
         if (!currentRecord) {
             if (line.includes('SQL执行信息:')) {
                 currentRecord = {
                     id: 0,
                     log_time: lastHeaderInfo.logTime,
+                    nano_time: lastHeaderInfo.nanoTime,
+                    level: lastHeaderInfo.level,
+                    service_name: lastHeaderInfo.serviceName,
+                    instance_name: lastHeaderInfo.instanceName,
+                    ip_address: lastHeaderInfo.ipAddress,
+                    host_name: lastHeaderInfo.hostName,
                     trace_id: lastHeaderInfo.traceId,
+                    span_id: lastHeaderInfo.spanId,
+                    parent_span_id: lastHeaderInfo.parentSpanId,
                     thread_name: lastHeaderInfo.threadName,
+                    logger_name: lastHeaderInfo.loggerName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -412,8 +576,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
                 currentRecord = {
                     id: 0,
                     log_time: lastHeaderInfo.logTime,
+                    nano_time: lastHeaderInfo.nanoTime,
+                    level: lastHeaderInfo.level,
+                    service_name: lastHeaderInfo.serviceName,
+                    instance_name: lastHeaderInfo.instanceName,
+                    ip_address: lastHeaderInfo.ipAddress,
+                    host_name: lastHeaderInfo.hostName,
                     trace_id: lastHeaderInfo.traceId,
+                    span_id: lastHeaderInfo.spanId,
+                    parent_span_id: lastHeaderInfo.parentSpanId,
                     thread_name: lastHeaderInfo.threadName,
+                    logger_name: lastHeaderInfo.loggerName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -443,8 +616,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
                 currentRecord = {
                     id: 0,
                     log_time: lastHeaderInfo.logTime,
+                    nano_time: lastHeaderInfo.nanoTime,
+                    level: lastHeaderInfo.level,
+                    service_name: lastHeaderInfo.serviceName,
+                    instance_name: lastHeaderInfo.instanceName,
+                    ip_address: lastHeaderInfo.ipAddress,
+                    host_name: lastHeaderInfo.hostName,
                     trace_id: lastHeaderInfo.traceId,
+                    span_id: lastHeaderInfo.spanId,
+                    parent_span_id: lastHeaderInfo.parentSpanId,
                     thread_name: lastHeaderInfo.threadName,
+                    logger_name: lastHeaderInfo.loggerName,
                     exec_time_ms: 0,
                     result_rows: 0,
                     db_manager: '',
@@ -503,14 +685,15 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace =
 
     await flushCurrent();
     await flushPerfTrace();
+    await flushAppLog();
 
-    return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces };
+    return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces, totalAppLogs };
 }
 
 /**
  * 遍历扫描指定目录/文件列表 (支持多核 Worker 线程池并行深度扫描)
  */
-async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
+async function parseLogs(targetPath, onRecord, onPerfTrace = null, onAppLog = null) {
     let files = [];
 
     function collectFiles(dirOrFilePath) {
@@ -541,7 +724,7 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
     }
 
     if (files.length === 0) {
-        return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0 };
+        return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0, totalAppLogs: 0 };
     }
 
     // 🚀 极限性能拉满：解锁全 CPU 核心全速并发解析
@@ -553,15 +736,23 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
         let grandTotalLines = 0;
         let grandTotalRecords = 0;
         let grandTotalPerfTraces = 0;
+        let grandTotalAppLogs = 0;
 
         for (const file of files) {
-            const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace);
+            const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace, onAppLog);
             grandTotalLines += result.totalLines;
             grandTotalRecords += result.totalRecords;
             grandTotalPerfTraces += (result.totalPerfTraces || 0);
+            grandTotalAppLogs += (result.totalAppLogs || 0);
         }
 
-        return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords, totalPerfTraces: grandTotalPerfTraces };
+        return {
+            totalFiles: files.length,
+            totalLines: grandTotalLines,
+            totalRecords: grandTotalRecords,
+            totalPerfTraces: grandTotalPerfTraces,
+            totalAppLogs: grandTotalAppLogs
+        };
     }
 
     // 🚀 多核 Worker 线程池全速分发处理
@@ -571,13 +762,14 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
     let grandTotalLines = 0;
     let grandTotalRecords = 0;
     let grandTotalPerfTraces = 0;
+    let grandTotalAppLogs = 0;
 
     const workerPromises = chunks.map((workerFiles) => {
         return new Promise((resolve, reject) => {
             if (workerFiles.length === 0) return resolve();
 
             const worker = new Worker(__filename, {
-                workerData: { files: workerFiles }
+                workerData: { files: workerFiles, hasAppLogCallback: !!onAppLog }
             });
 
             let pendingBatchPromise = Promise.resolve();
@@ -590,9 +782,11 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
                         for (let i = 0; i < len; i++) {
                             grandTotalRecords++;
                             records[i].id = grandTotalRecords;
-                            const res = onRecord(records[i]);
-                            if (res && typeof res.then === 'function') {
-                                await res;
+                            if (onRecord) {
+                                const res = onRecord(records[i]);
+                                if (res && typeof res.then === 'function') {
+                                    await res;
+                                }
                             }
                         }
                     });
@@ -603,6 +797,21 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
                             const res = onPerfTrace(msg.data);
                             if (res && typeof res.then === 'function') {
                                 await res;
+                            }
+                        }
+                    });
+                } else if (msg.type === 'app_log_batch') {
+                    pendingBatchPromise = pendingBatchPromise.then(async () => {
+                        const logs = msg.logs;
+                        const len = logs.length;
+                        for (let i = 0; i < len; i++) {
+                            grandTotalAppLogs++;
+                            logs[i].id = grandTotalAppLogs;
+                            if (onAppLog) {
+                                const res = onAppLog(logs[i]);
+                                if (res && typeof res.then === 'function') {
+                                    await res;
+                                }
                             }
                         }
                     });
@@ -621,7 +830,13 @@ async function parseLogs(targetPath, onRecord, onPerfTrace = null) {
 
     await Promise.all(workerPromises);
 
-    return { totalFiles: files.length, totalLines: grandTotalLines, totalRecords: grandTotalRecords, totalPerfTraces: grandTotalPerfTraces };
+    return {
+        totalFiles: files.length,
+        totalLines: grandTotalLines,
+        totalRecords: grandTotalRecords,
+        totalPerfTraces: grandTotalPerfTraces,
+        totalAppLogs: grandTotalAppLogs
+    };
 }
 
 // 🚀 Worker 线程独立子进程入口
@@ -630,33 +845,55 @@ if (!isMainThread && workerData && workerData.files) {
         let totalLines = 0;
         let totalRecords = 0;
         let totalPerfTraces = 0;
+        let totalAppLogs = 0;
+        const wantAppLogs = !!workerData.hasAppLogCallback;
 
         for (const file of workerData.files) {
             let batch = [];
-            const result = await parseLogFile(file, async (record) => {
-                batch.push(record);
-                if (batch.length >= 10000) {
-                    parentPort.postMessage({ type: 'batch', records: batch });
-                    batch = [];
-                }
-            }, 0, async (perfData) => {
-                parentPort.postMessage({ type: 'perf_trace', data: perfData });
-            });
+            let appLogBatch = [];
+            const result = await parseLogFile(
+                file,
+                async (record) => {
+                    batch.push(record);
+                    if (batch.length >= 10000) {
+                        parentPort.postMessage({ type: 'batch', records: batch });
+                        batch = [];
+                    }
+                },
+                0,
+                async (perfData) => {
+                    parentPort.postMessage({ type: 'perf_trace', data: perfData });
+                },
+                wantAppLogs ? async (appLog) => {
+                    appLogBatch.push(appLog);
+                    if (appLogBatch.length >= 5000) {
+                        parentPort.postMessage({ type: 'app_log_batch', logs: appLogBatch });
+                        appLogBatch = [];
+                    }
+                } : null
+            );
 
             if (batch.length > 0) {
                 parentPort.postMessage({ type: 'batch', records: batch });
                 batch = [];
             }
+            if (appLogBatch.length > 0) {
+                parentPort.postMessage({ type: 'app_log_batch', logs: appLogBatch });
+                appLogBatch = [];
+            }
 
             totalLines += result.totalLines;
             totalRecords += result.totalRecords;
             totalPerfTraces += (result.totalPerfTraces || 0);
+            totalAppLogs += (result.totalAppLogs || 0);
         }
-        parentPort.postMessage({ type: 'done', totalLines, totalRecords, totalPerfTraces });
+        parentPort.postMessage({ type: 'done', totalLines, totalRecords, totalPerfTraces, totalAppLogs });
     })();
 }
 
 module.exports = {
+    isLogHeader,
+    parseLogHeader,
     parseLogs,
     parseLogFile,
     parseTimeToMs,
