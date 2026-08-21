@@ -13,6 +13,15 @@
       <SqlCodeBox :code="template" :defaultExpanded="true" @toast="$emit('toast', $event)" />
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="📋 SQL 模板调用明细"
+      :subtitle="filterTraceId ? `Trace: ${filterTraceId}` : undefined"
+      :totalCount="total"
+      :totalCostMs="statsTotalCost"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -65,6 +74,7 @@ import { ref } from 'vue';
 import { api } from '../api';
 import { SqlRecord } from '../types';
 import { formatDbManager } from '../utils/vscode';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 import SqlCodeBox from '../components/SqlCodeBox.vue';
@@ -78,6 +88,8 @@ const emit = defineEmits<{
 
 const list = ref<SqlRecord[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(50);
 const template = ref('');
@@ -100,6 +112,8 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '📋 SQL 模板调用明细');
     }
   } finally {

@@ -14,6 +14,15 @@
       <span class="toolbar-tip">💡 参数化 SQL 模板聚合统计，识别调用最频繁、累计耗时最高的 SQL</span>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="📊 SQL 模板执行频次榜"
+      :totalCostMs="statsTotalCost"
+      :totalCount="statsTotalSqls"
+      :totalTraces="statsTotalTraces"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -67,6 +76,7 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { SqlSummary } from '../types';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 import SqlCodeBox from '../components/SqlCodeBox.vue';
@@ -79,6 +89,10 @@ const emit = defineEmits<{
 
 const list = ref<SqlSummary[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsTotalSqls = ref(0);
+const statsTotalTraces = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const keyword = ref('');
@@ -96,6 +110,10 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsTotalSqls.value = res.totalSqls || 0;
+      statsTotalTraces.value = res.totalTraces || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '📊 SQL 频次榜');
     }
   } finally {

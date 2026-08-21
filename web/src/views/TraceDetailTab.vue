@@ -17,6 +17,15 @@
       </div>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="🔗 Trace 链路 SQL 时序回放"
+      :subtitle="traceId ? `Trace: ${traceId}` : '未指定 TraceID'"
+      :totalCount="total"
+      :totalCostMs="statsTotalCost"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -64,6 +73,7 @@
 import { ref } from 'vue';
 import { api } from '../api';
 import { SqlRecord } from '../types';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 import SqlCodeBox from '../components/SqlCodeBox.vue';
@@ -77,6 +87,8 @@ const emit = defineEmits<{
 
 const list = ref<SqlRecord[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(50);
 const traceId = ref('');
@@ -86,6 +98,8 @@ async function loadData(p = 1) {
   if (!traceId.value) {
     list.value = [];
     total.value = 0;
+    statsTotalCost.value = 0;
+    statsMaxCost.value = 0;
     return;
   }
   page.value = p;
@@ -99,6 +113,8 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, `🔗 Trace 链路分析: ${traceId.value}`);
     }
   } finally {

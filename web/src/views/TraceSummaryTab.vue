@@ -24,6 +24,15 @@
       <span class="toolbar-tip">💡 按全局 Trace ID 聚合汇总，累计耗时由高到低排序，一键穿透链路</span>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="🌐 Trace 聚合大盘"
+      :totalTraces="total"
+      :totalCostMs="statsTotalCost"
+      :totalCount="statsTotalSqls"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -81,6 +90,7 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { TraceSummaryItem } from '../types';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 
@@ -91,6 +101,9 @@ const emit = defineEmits<{
 
 const list = ref<TraceSummaryItem[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsTotalSqls = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const keyword = ref('');
@@ -110,6 +123,9 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsTotalSqls.value = res.totalSqls || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '🌐 Trace 聚合大盘');
     }
   } finally {

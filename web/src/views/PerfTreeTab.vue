@@ -26,6 +26,14 @@
         <span class="toolbar-tip">💡 基于 ActionRecorder 全链路端到端剖析，一览请求业务耗时与 SQL 耗时占比</span>
       </div>
 
+      <!-- 列表独立度量条 -->
+      <ContextSummaryStrip
+        title="⚡ 全链路性能剖析列表"
+        :totalCount="total"
+        :totalCostMs="statsTotalCost"
+        :maxCostMs="statsMaxCost"
+      />
+
       <table>
         <thead>
           <tr>
@@ -198,6 +206,7 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { PerfTraceRow, PerfTreeData, ActionNode } from '../types';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import StackedBar from '../components/StackedBar.vue';
 import Pagination from '../components/Pagination.vue';
@@ -210,6 +219,8 @@ const emit = defineEmits<{
 
 const list = ref<PerfTraceRow[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const keyword = ref('');
@@ -234,6 +245,8 @@ async function loadList(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '⚡ 当前统计: 全链路性能树');
     }
   } finally {

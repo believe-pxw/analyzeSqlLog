@@ -75,6 +75,16 @@
       </span>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="📜 纯净日志与执行流透视"
+      :subtitle="traceId ? `Trace: ${traceId}` : '全量日志检索'"
+      :totalCount="total"
+    >
+      <span v-if="traceId" class="strip-metric">已识别 Span: <span class="strip-val">{{ spans.length }} 个</span></span>
+      <span v-if="hasPerfTree" class="strip-metric" style="color: #166534; font-weight: 600;">⚡ 包含性能分析树</span>
+    </ContextSummaryStrip>
+
     <table>
       <thead>
         <tr>
@@ -156,6 +166,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import Pagination from '../components/Pagination.vue';
 import SourceLink from '../components/SourceLink.vue';
 import CostBadge from '../components/CostBadge.vue';

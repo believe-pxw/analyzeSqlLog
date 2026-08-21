@@ -34,6 +34,16 @@
       <span class="toolbar-tip">💡 全库 SQL 单次执行耗时严格降序排行</span>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="🐢 慢 SQL 执行排行 (降序)"
+      :subtitle="traceId ? `Trace: ${traceId}` : undefined"
+      :totalCostMs="statsTotalCost"
+      :totalCount="total"
+      :totalTraces="statsTotalTraces"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -85,6 +95,7 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { SqlRecord } from '../types';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 import SqlCodeBox from '../components/SqlCodeBox.vue';
@@ -98,6 +109,9 @@ const emit = defineEmits<{
 
 const list = ref<SqlRecord[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsTotalTraces = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const traceId = ref('');
@@ -119,6 +133,9 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsTotalTraces.value = res.totalTraces || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '🐢 慢 SQL 排行');
     }
   } finally {

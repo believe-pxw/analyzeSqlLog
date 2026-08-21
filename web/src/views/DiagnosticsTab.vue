@@ -34,6 +34,16 @@
       <span class="toolbar-tip">💡 自动检测同一事务 (dbManager) 内高频重复执行的 SQL 语句 (N+1 隐患)</span>
     </div>
 
+    <!-- 专属上下文度量条 -->
+    <ContextSummaryStrip
+      title="🔁 事务内重复 SQL (N+1 隐患诊断)"
+      :subtitle="traceId ? `Trace: ${traceId}` : undefined"
+      :totalCostMs="statsTotalCost"
+      :totalCount="statsTotalSqls"
+      :totalTraces="statsTotalTraces"
+      :maxCostMs="statsMaxCost"
+    />
+
     <table>
       <thead>
         <tr>
@@ -98,6 +108,7 @@ import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { DiagnosticsItem } from '../types';
 import { formatDbManager } from '../utils/vscode';
+import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
 import SqlCodeBox from '../components/SqlCodeBox.vue';
@@ -112,6 +123,10 @@ const emit = defineEmits<{
 
 const list = ref<DiagnosticsItem[]>([]);
 const total = ref(0);
+const statsTotalCost = ref(0);
+const statsTotalSqls = ref(0);
+const statsTotalTraces = ref(0);
+const statsMaxCost = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const traceId = ref('');
@@ -133,6 +148,10 @@ async function loadData(p = 1) {
     if (res.success) {
       list.value = res.data;
       total.value = res.total;
+      statsTotalCost.value = res.totalCostMs || 0;
+      statsTotalSqls.value = res.totalSqls || 0;
+      statsTotalTraces.value = res.totalTraces || 0;
+      statsMaxCost.value = res.maxCostMs || 0;
       emit('update-stats', res, '🔁 事务内重复 SQL (N+1) 诊断');
     }
   } finally {

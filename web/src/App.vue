@@ -21,23 +21,11 @@
       </button>
     </div>
 
-    <!-- 上下文动态度量条 -->
-    <div class="context-summary-strip">
-      <div class="strip-left">{{ currentStatsLabel }}</div>
-      <div class="strip-right">
-        <span class="strip-metric">总耗时: <span class="strip-val red">{{ (contextStats.totalCostMs || 0).toLocaleString() }} ms</span></span>
-        <span class="strip-metric">总次数: <span class="strip-val">{{ (contextStats.totalSqls || contextStats.total || 0).toLocaleString() }}</span></span>
-        <span class="strip-metric">独立 Trace: <span class="strip-val">{{ (contextStats.totalTraces || 0).toLocaleString() }}</span></span>
-        <span class="strip-metric">最高单条: <span class="strip-val red">{{ (contextStats.maxCostMs || 0).toLocaleString() }} ms</span></span>
-      </div>
-    </div>
-
-    <!-- 8 大 Tab 视图 -->
+    <!-- 8 大 Tab 视图 (各自独立拥有专属的 ContextSummaryStrip) -->
     <keep-alive>
       <component
         :is="activeTabComponent"
         ref="currentTabRef"
-        @update-stats="onUpdateStats"
         @jump-tab="onJumpTab"
         @jump-detail="onJumpDetail"
         @toast="showToast"
