@@ -7,10 +7,10 @@
       </div>
       <div class="detail-tags">
         <span v-if="filterTraceId" class="tag">Trace: {{ filterTraceId }}</span>
-        <span v-if="filterDbManager" class="tag">dbManager: {{ filterDbManager }}</span>
+        <span v-if="filterDbManager" class="tag">dbManager: {{ formatDbManager(filterDbManager) }}</span>
         <span class="tag">总调用: {{ total }} 次</span>
       </div>
-      <div class="sql-preview-box">{{ template }}</div>
+      <SqlCodeBox :code="template" :defaultExpanded="true" @toast="$emit('toast', $event)" />
     </div>
 
     <table>
@@ -22,7 +22,7 @@
           <th class="col-nowrap">耗时</th>
           <th class="col-nowrap">影响行数</th>
           <th class="col-nowrap">源码定位</th>
-          <th>完整实例化 SQL (点击展开/复制)</th>
+          <th>完整实例化 SQL (点击展开/收起)</th>
         </tr>
       </thead>
       <tbody>
@@ -35,16 +35,16 @@
         <tr v-for="(r, idx) in list" :key="r.id || idx">
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
           <td class="col-time">{{ r.log_time }}</td>
-          <td class="col-nowrap font-mono">
-            <a href="javascript:void(0)" @click="$emit('jump-tab', 'trace', r.trace_id)" style="color: #0284c7; text-decoration: none; font-weight: 600;">{{ r.trace_id }}</a>
+          <td class="col-nowrap col-mono">
+            <a href="javascript:void(0)" class="link-btn" @click="$emit('jump-tab', 'trace', r.trace_id)">{{ r.trace_id }}</a>
           </td>
           <td class="col-nowrap"><CostBadge :costMs="r.exec_time_ms" /></td>
           <td class="col-nowrap">{{ r.result_rows !== undefined ? r.result_rows + ' rows' : '-' }}</td>
-          <td class="col-nowrap" style="font-size: 11px; color: var(--text-muted);">
-            {{ formatSource(r.source_file, r.line_number) }}
+          <td class="col-nowrap">
+            <SourceLink :sourceFile="r.source_file" :lineNumber="r.line_number" @toast="$emit('toast', $event)" />
           </td>
           <td>
-            <div class="sql-code" @click="copySql(r.full_sql || r.sql_template)">{{ r.full_sql || r.sql_template }}</div>
+            <SqlCodeBox :code="r.full_sql || r.sql_template" @toast="$emit('toast', $event)" />
           </td>
         </tr>
       </tbody>
@@ -64,8 +64,11 @@
 import { ref } from 'vue';
 import { api } from '../api';
 import { SqlRecord } from '../types';
+import { formatDbManager } from '../utils/vscode';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
+import SourceLink from '../components/SourceLink.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;
@@ -116,17 +119,6 @@ function copyTemplate() {
   emit('toast', '已复制 SQL 模板至剪贴板');
 }
 
-function copySql(sql: string) {
-  navigator.clipboard.writeText(sql);
-  emit('toast', '已复制完整 SQL 至剪贴板');
-}
-
-function formatSource(file: string, line: number) {
-  if (!file) return '';
-  const base = file.split(/[\\/]/).pop();
-  return `${base}:${line}`;
-}
-
 defineExpose({
   setTemplate,
   loadData,
@@ -170,80 +162,6 @@ defineExpose({
   padding: 1px 6px;
   border-radius: 3px;
   border: 1px solid #bae6fd;
+  font-family: var(--font-mono);
 }
-.sql-preview-box {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
-  color: #1e293b;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 4px 8px;
-  max-height: 90px;
-  overflow-y: auto;
-  word-break: break-all;
-  white-space: pre-wrap;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  margin-bottom: 6px;
-}
-th, td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-  vertical-align: middle;
-}
-th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-tr:hover td { background: #f1f5f9; }
-.empty-cell {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 20px;
-}
-.btn-action {
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  background: #ffffff;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-}
-.btn-action:hover {
-  background: #e2e8f0;
-  color: var(--accent);
-}
-.sql-code {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
-  color: #1e293b;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 3px 6px;
-  max-height: 80px;
-  overflow-y: auto;
-  word-break: break-all;
-  white-space: pre-wrap;
-  cursor: pointer;
-}
-.sql-code:hover {
-  border-color: #cbd5e1;
-  background: #f1f5f9;
-}
-.col-nowrap { white-space: nowrap; }
-.col-time { white-space: nowrap; font-size: 12px; font-family: monospace; }
-.font-mono { font-family: monospace; }
 </style>

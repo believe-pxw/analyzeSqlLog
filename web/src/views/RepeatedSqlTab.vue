@@ -23,7 +23,7 @@
           <th class="col-nowrap">平均耗时</th>
           <th class="col-nowrap">最高耗时</th>
           <th class="col-nowrap">涉及 Trace 数</th>
-          <th>SQL 模板语句 (左键展开/复制)</th>
+          <th>SQL 模板语句 (点击展开/收起)</th>
           <th class="col-nowrap" style="width: 90px;">调用明细</th>
         </tr>
       </thead>
@@ -40,11 +40,11 @@
             <span class="freq-badge">{{ r.repeat_count.toLocaleString() }} 次</span>
           </td>
           <td class="col-nowrap"><CostBadge :costMs="r.total_time_ms" /></td>
-          <td class="col-nowrap" style="color: #64748b; font-family: monospace;">{{ r.avg_time_ms }} ms</td>
+          <td class="col-nowrap col-mono" style="color: #64748b;">{{ r.avg_time_ms }} ms</td>
           <td class="col-nowrap"><CostBadge :costMs="r.max_time_ms" /></td>
-          <td class="col-nowrap font-mono">{{ r.trace_count }} 个</td>
+          <td class="col-nowrap col-mono">{{ r.trace_count }} 个</td>
           <td>
-            <div class="sql-code" @click="copySql(r.sql_template)">{{ r.sql_template }}</div>
+            <SqlCodeBox :code="r.sql_template" @toast="$emit('toast', $event)" />
           </td>
           <td class="col-nowrap">
             <button class="btn-action" @click="$emit('jump-detail', r.sql_template, { source: 'repeated', count: r.repeat_count })">📋 查看调用</button>
@@ -69,6 +69,7 @@ import { api } from '../api';
 import { SqlSummary } from '../types';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;
@@ -100,11 +101,6 @@ async function loadData(p = 1) {
   } finally {
     loading.value = false;
   }
-}
-
-function copySql(sql: string) {
-  navigator.clipboard.writeText(sql);
-  emit('toast', '已复制 SQL 模板至剪贴板');
 }
 
 onMounted(() => {
@@ -153,47 +149,6 @@ defineExpose({
   color: var(--text-muted);
   margin-left: auto;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  margin-bottom: 6px;
-}
-th, td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-  vertical-align: middle;
-}
-th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-tr:hover td { background: #f1f5f9; }
-.empty-cell {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 20px;
-}
-.btn-action {
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  background: #ffffff;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-}
-.btn-action:hover {
-  background: #e2e8f0;
-  color: var(--accent);
-}
 .freq-badge {
   background: #f1f5f9;
   color: #0f172a;
@@ -201,26 +156,7 @@ tr:hover td { background: #f1f5f9; }
   padding: 1px 6px;
   border-radius: 3px;
   font-weight: 700;
-  font-family: monospace;
-}
-.sql-code {
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  color: #1e293b;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 3px 6px;
-  max-height: 80px;
-  overflow-y: auto;
-  word-break: break-all;
-  white-space: pre-wrap;
-  cursor: pointer;
 }
-.sql-code:hover {
-  border-color: #cbd5e1;
-  background: #f1f5f9;
-}
-.col-nowrap { white-space: nowrap; }
-.font-mono { font-family: monospace; }
 </style>

@@ -26,8 +26,11 @@
       <!-- 关联 SQL 内容展示 -->
       <div v-if="showSql && node.sqlDetails && node.sqlDetails.length > 0" class="sql-preview-box">
         <div v-for="(s, idx) in node.sqlDetails" :key="idx" class="sql-item">
-          <div class="sql-text">{{ s.sql }}</div>
-          <div class="sql-meta">耗时: {{ s.costMs }} ms | 源码: {{ s.sourceFile }}:{{ s.lineNumber }}</div>
+          <SqlCodeBox :code="s.sql" @toast="$emit('toast', $event)" />
+          <div class="sql-meta">
+            <span>耗时: {{ s.costMs }} ms</span>
+            <SourceLink :sourceFile="s.sourceFile" :lineNumber="s.lineNumber" @toast="$emit('toast', $event)" />
+          </div>
         </div>
       </div>
     </td>
@@ -47,13 +50,13 @@
     </td>
 
     <!-- 间隙 (Gap) -->
-    <td class="col-nowrap" style="color: #64748b; font-family: monospace;">
+    <td class="col-nowrap col-mono" style="color: #64748b;">
       {{ node.gapCostMs }} ms
     </td>
 
     <!-- 日志源码定位 -->
-    <td class="col-nowrap" style="font-size: 11px; color: var(--text-muted);">
-      {{ formatSource(node.sourceFile, node.lineNumber) }}
+    <td class="col-nowrap">
+      <SourceLink :sourceFile="node.sourceFile" :lineNumber="node.lineNumber" @toast="$emit('toast', $event)" />
     </td>
   </tr>
 
@@ -65,6 +68,7 @@
       :node="child"
       :rootTotalCost="rootTotalCost"
       @jump-applogs="$emit('jump-applogs', $event)"
+      @toast="$emit('toast', $event)"
     />
   </template>
 </template>
@@ -73,6 +77,8 @@
 import { ref, computed } from 'vue';
 import { ActionNode } from '../types';
 import CostBadge from '../components/CostBadge.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
+import SourceLink from '../components/SourceLink.vue';
 
 const props = defineProps<{
   node: ActionNode;
@@ -81,6 +87,7 @@ const props = defineProps<{
 
 defineEmits<{
   (e: 'jump-applogs', traceId: string): void;
+  (e: 'toast', msg: string): void;
 }>();
 
 const showSql = ref(false);
@@ -101,12 +108,6 @@ const rowBgColor = computed(() => {
 
 function toggleCollapse() {
   props.node.collapsed = !props.node.collapsed;
-}
-
-function formatSource(file: string, line: number) {
-  if (!file) return '';
-  const base = file.split(/[\\/]/).pop();
-  return `${base}:${line}`;
 }
 </script>
 
@@ -171,17 +172,15 @@ function formatSource(file: string, line: number) {
   font-size: 11.5px;
 }
 .sql-item {
-  margin-bottom: 4px;
-}
-.sql-text {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  word-break: break-all;
-  white-space: pre-wrap;
-  color: #0f172a;
+  margin-bottom: 6px;
 }
 .sql-meta {
   font-size: 11px;
   color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
 }
 .self-pct {
   font-size: 11px;
@@ -201,8 +200,5 @@ function formatSource(file: string, line: number) {
 .tree-bar-fill {
   height: 100%;
   background: #ef4444;
-}
-.col-nowrap {
-  white-space: nowrap;
 }
 </style>

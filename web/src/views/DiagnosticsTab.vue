@@ -44,20 +44,25 @@
           <th class="col-nowrap">累计耗时</th>
           <th class="col-nowrap">调优建议</th>
           <th>SQL 模板语句 (点击展开/收起)</th>
-          <th class="col-nowrap" style="width: 110px;">操作</th>
+          <th class="col-nowrap">源码定位</th>
+          <th class="col-nowrap" style="width: 90px;">操作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loading">
-          <td colspan="8" class="empty-cell">正在诊断事务内重复 SQL...</td>
+          <td colspan="9" class="empty-cell">正在诊断事务内重复 SQL...</td>
         </tr>
         <tr v-else-if="list.length === 0">
-          <td colspan="8" class="empty-cell">未检测到任何超过阈值的事务内循环 SQL</td>
+          <td colspan="9" class="empty-cell">未检测到任何超过阈值的事务内循环 SQL</td>
         </tr>
         <tr v-for="(r, idx) in list" :key="idx">
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
-          <td class="col-nowrap font-mono font-bold" style="color: #0284c7;">{{ r.trace_id }}</td>
-          <td class="col-nowrap font-mono" style="color: #475569;">{{ r.db_manager }}</td>
+          <td class="col-nowrap col-mono">
+            <a href="javascript:void(0)" class="link-btn" @click="$emit('jump-tab', 'trace', r.trace_id)">{{ r.trace_id }}</a>
+          </td>
+          <td class="col-nowrap col-mono">
+            <span class="dbmanager-tag" :title="r.db_manager">{{ formatDbManager(r.db_manager) }}</span>
+          </td>
           <td class="col-nowrap">
             <span class="repeat-badge">{{ r.repeat_count }} 次循环</span>
           </td>
@@ -66,7 +71,10 @@
             <span :class="['advice-tag', r.repeat_count >= 20 ? 'advice-severe' : 'advice-warn']">{{ r.advice }}</span>
           </td>
           <td>
-            <div class="sql-code" @click="copySql(r.sql_template)">{{ r.sql_template }}</div>
+            <SqlCodeBox :code="r.sql_template" @toast="$emit('toast', $event)" />
+          </td>
+          <td class="col-nowrap">
+            <SourceLink :sourceFile="r.example_source_file" :lineNumber="r.example_line_number" @toast="$emit('toast', $event)" />
           </td>
           <td class="col-nowrap">
             <button class="btn-action" @click="$emit('jump-detail', r.sql_template, { traceId: r.trace_id, dbManager: r.db_manager })">📋 查看调用</button>
@@ -89,11 +97,15 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { DiagnosticsItem } from '../types';
+import { formatDbManager } from '../utils/vscode';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
+import SourceLink from '../components/SourceLink.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;
+  (e: 'jump-tab', tab: string, traceId?: string): void;
   (e: 'jump-detail', template: string, filter?: { traceId?: string; dbManager?: string }): void;
   (e: 'toast', msg: string): void;
 }>();
@@ -126,11 +138,6 @@ async function loadData(p = 1) {
   } finally {
     loading.value = false;
   }
-}
-
-function copySql(sql: string) {
-  navigator.clipboard.writeText(sql);
-  emit('toast', '已复制 SQL 模板至剪贴板');
 }
 
 onMounted(() => {
@@ -179,47 +186,6 @@ defineExpose({
   color: var(--text-muted);
   margin-left: auto;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  margin-bottom: 6px;
-}
-th, td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-  vertical-align: middle;
-}
-th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-tr:hover td { background: #f1f5f9; }
-.empty-cell {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 20px;
-}
-.btn-action {
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  background: #ffffff;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-}
-.btn-action:hover {
-  background: #e2e8f0;
-  color: var(--accent);
-}
 .repeat-badge {
   background: #fee2e2;
   color: #dc2626;
@@ -227,7 +193,7 @@ tr:hover td { background: #f1f5f9; }
   padding: 1px 6px;
   border-radius: 3px;
   font-weight: 700;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
 }
 .advice-tag {
@@ -239,25 +205,14 @@ tr:hover td { background: #f1f5f9; }
 }
 .advice-severe { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
 .advice-warn { background: #fef3c7; color: #d97706; border: 1px solid #fde68a; }
-.sql-code {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
-  color: #1e293b;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 3px 6px;
-  max-height: 80px;
-  overflow-y: auto;
-  word-break: break-all;
-  white-space: pre-wrap;
-  cursor: pointer;
-}
-.sql-code:hover {
-  border-color: #cbd5e1;
+.dbmanager-tag {
   background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: default;
 }
-.col-nowrap { white-space: nowrap; }
-.font-mono { font-family: monospace; }
-.font-bold { font-weight: 700; }
 </style>

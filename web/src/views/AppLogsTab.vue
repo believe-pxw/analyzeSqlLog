@@ -108,8 +108,8 @@
           <td>
             <div class="log-msg-text">{{ formatMsg(log.message) }}</div>
           </td>
-          <td class="col-nowrap" style="font-size: 11px; color: var(--text-muted);">
-            {{ formatSource(log.source_file, log.line_number) }}
+          <td class="col-nowrap">
+            <SourceLink :sourceFile="log.source_file" :lineNumber="log.line_number" @toast="$emit('toast', $event)" />
           </td>
         </tr>
       </tbody>
@@ -130,6 +130,7 @@ import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { AppLogRecord } from '../types';
 import Pagination from '../components/Pagination.vue';
+import SourceLink from '../components/SourceLink.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;

@@ -47,12 +47,12 @@
         </tr>
         <tr v-for="(r, idx) in list" :key="r.trace_id">
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
-          <td class="col-nowrap font-mono font-bold" style="color: #0284c7;">{{ r.trace_id }}</td>
+          <td class="col-nowrap col-mono font-bold" style="color: #0284c7;">{{ r.trace_id }}</td>
           <td class="col-nowrap"><strong>{{ r.sql_count }}</strong> 次</td>
           <td class="col-nowrap"><CostBadge :costMs="r.total_time_ms" /></td>
-          <td class="col-nowrap" style="color: #64748b; font-family: monospace;">{{ r.avg_time_ms }} ms</td>
+          <td class="col-nowrap col-mono" style="color: #64748b;">{{ r.avg_time_ms }} ms</td>
           <td class="col-nowrap"><CostBadge :costMs="r.max_time_ms" /></td>
-          <td class="col-nowrap">{{ r.db_manager_count }} 个</td>
+          <td class="col-nowrap col-mono">{{ r.db_manager_count }} 个</td>
           <td class="col-time">{{ r.first_time }}</td>
           <td class="col-nowrap">
             <div style="display: flex; gap: 4px;">

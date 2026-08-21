@@ -43,7 +43,7 @@
           <th class="col-time">记录时间</th>
           <th class="col-nowrap">影响行数</th>
           <th class="col-nowrap">源码定位</th>
-          <th>完整实例化 SQL 语句 (点击展开/复制)</th>
+          <th>完整实例化 SQL 语句 (点击展开/收起)</th>
         </tr>
       </thead>
       <tbody>
@@ -56,16 +56,16 @@
         <tr v-for="(r, idx) in list" :key="r.id || idx">
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
           <td class="col-nowrap"><CostBadge :costMs="r.exec_time_ms" /></td>
-          <td class="col-nowrap font-mono" style="color: #0284c7;">
-            <a href="javascript:void(0)" @click="$emit('jump-tab', 'trace', r.trace_id)" style="color: #0284c7; text-decoration: none; font-weight: 600;">{{ r.trace_id }}</a>
+          <td class="col-nowrap col-mono">
+            <a href="javascript:void(0)" class="link-btn" @click="$emit('jump-tab', 'trace', r.trace_id)">{{ r.trace_id }}</a>
           </td>
           <td class="col-time">{{ r.log_time }}</td>
           <td class="col-nowrap">{{ r.result_rows !== undefined ? r.result_rows + ' rows' : '-' }}</td>
-          <td class="col-nowrap" style="font-size: 11px; color: var(--text-muted);">
-            {{ formatSource(r.source_file, r.line_number) }}
+          <td class="col-nowrap">
+            <SourceLink :sourceFile="r.source_file" :lineNumber="r.line_number" @toast="$emit('toast', $event)" />
           </td>
           <td>
-            <div class="sql-code" @click="copySql(r.full_sql || r.sql_template)">{{ r.full_sql || r.sql_template }}</div>
+            <SqlCodeBox :code="r.full_sql || r.sql_template" @toast="$emit('toast', $event)" />
           </td>
         </tr>
       </tbody>
@@ -87,6 +87,8 @@ import { api } from '../api';
 import { SqlRecord } from '../types';
 import CostBadge from '../components/CostBadge.vue';
 import Pagination from '../components/Pagination.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
+import SourceLink from '../components/SourceLink.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;
@@ -122,17 +124,6 @@ async function loadData(p = 1) {
   } finally {
     loading.value = false;
   }
-}
-
-function copySql(sql: string) {
-  navigator.clipboard.writeText(sql);
-  emit('toast', '已复制完整 SQL 至剪贴板');
-}
-
-function formatSource(file: string, line: number) {
-  if (!file) return '';
-  const base = file.split(/[\\/]/).pop();
-  return `${base}:${line}`;
 }
 
 onMounted(() => {
@@ -181,52 +172,4 @@ defineExpose({
   color: var(--text-muted);
   margin-left: auto;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  margin-bottom: 6px;
-}
-th, td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-  vertical-align: middle;
-}
-th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-tr:hover td { background: #f1f5f9; }
-.empty-cell {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 20px;
-}
-.sql-code {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
-  color: #1e293b;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 3px 6px;
-  max-height: 80px;
-  overflow-y: auto;
-  word-break: break-all;
-  white-space: pre-wrap;
-  cursor: pointer;
-}
-.sql-code:hover {
-  border-color: #cbd5e1;
-  background: #f1f5f9;
-}
-.col-nowrap { white-space: nowrap; }
-.col-time { white-space: nowrap; font-size: 12px; font-family: monospace; }
-.font-mono { font-family: monospace; }
 </style>
