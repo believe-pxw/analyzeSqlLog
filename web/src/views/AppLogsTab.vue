@@ -21,13 +21,14 @@
         </select>
       </div>
       <div class="input-group">
-        <span>日志级别:</span>
+        <span>日志类型/级别:</span>
         <select v-model="level" @change="loadLogs(1)">
-          <option value="">全部级别 (ALL)</option>
-          <option value="ERROR">仅 ERROR (错误与异常)</option>
-          <option value="WARN">仅 WARN (警告)</option>
-          <option value="INFO">仅 INFO (信息)</option>
-          <option value="DEBUG">仅 DEBUG (调试)</option>
+          <option value="">全部类型 (ALL)</option>
+          <option value="SQL">🟢 仅 SQL 语句</option>
+          <option value="ERROR">🔴 仅 ERROR (错误与异常)</option>
+          <option value="WARN">🟠 仅 WARN (警告)</option>
+          <option value="INFO">🔵 仅 INFO (信息)</option>
+          <option value="DEBUG">⚪ 仅 DEBUG (调试)</option>
         </select>
       </div>
       <div class="input-group">
@@ -36,11 +37,19 @@
           type="text"
           v-model="keyword"
           @input="loadLogs(1)"
-          placeholder="过滤正文/类名..."
+          placeholder="过滤正文/SQL/类名..."
           style="width: 160px;"
         />
       </div>
       <div class="toolbar-right">
+        <button
+          v-if="hasPerfTree && traceId"
+          class="btn-action btn-perf"
+          @click="$emit('jump-tab', 'perf-tree', traceId)"
+          title="穿透至该 Trace 的全链路性能树"
+        >
+          ⚡ 穿透至性能树
+        </button>
         <button class="btn-action" @click="expandAllStacks(true)">➕ 展开堆栈</button>
         <button class="btn-action" @click="expandAllStacks(false)">➖ 折叠堆栈</button>
         <button class="btn-action" @click="copyLogs">📋 复制日志</button>
@@ -71,22 +80,22 @@
         <tr>
           <th class="col-nowrap" style="width: 35px;">#</th>
           <th class="col-time" style="width: 175px;">日志时刻 (NanoTime)</th>
-          <th class="col-nowrap" style="width: 65px;">级别</th>
+          <th class="col-nowrap" style="width: 65px;">类型</th>
           <th class="col-nowrap" style="width: 140px;">Span ID (跨度)</th>
           <th class="col-nowrap" style="width: 110px;">节点 & 线程</th>
-          <th style="width: 220px;">类全限定名 (LoggerName)</th>
-          <th>日志消息正文 & 异常堆栈</th>
+          <th style="width: 200px;">类名 / dbManager</th>
+          <th>日志消息正文 & SQL 语句 & 异常堆栈</th>
           <th class="col-nowrap" style="width: 110px;">源码定位</th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loading">
-          <td colspan="8" class="empty-cell">正在提取纯净日志...</td>
+          <td colspan="8" class="empty-cell">正在提取纯净日志与 SQL 执行流...</td>
         </tr>
         <tr v-else-if="logs.length === 0">
-          <td colspan="8" class="empty-cell">未检索到任何符合条件的应用日志记录</td>
+          <td colspan="8" class="empty-cell">未检索到任何符合条件的日志或 SQL 记录</td>
         </tr>
-        <tr v-for="(log, idx) in logs" :key="log.id || idx">
+        <tr v-for="(log, idx) in logs" :key="log.id || idx" :class="{ 'row-sql': log.is_sql }">
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
           <td class="col-time">
             <div>{{ log.log_time }}</div>
@@ -96,17 +105,36 @@
             <span :class="['level-badge', getLevelClass(log.level)]">{{ log.level }}</span>
           </td>
           <td class="col-nowrap">
-            <span class="span-tag" @click="spanId = log.span_id; loadLogs(1)">{{ log.span_id }}</span>
+            <span v-if="log.span_id && log.span_id !== '-'" class="span-tag" @click="spanId = log.span_id; loadLogs(1)">{{ log.span_id }}</span>
+            <span v-else style="color: #94a3b8;">-</span>
           </td>
           <td class="col-nowrap">
             <div style="font-weight: 600; font-size: 11px;">{{ log.service_name }}</div>
             <div style="font-size: 10.5px; color: var(--text-muted);">{{ log.thread_name }}</div>
           </td>
-          <td style="font-family: monospace; font-size: 11.5px; word-break: break-all;">
+          <td style="font-family: monospace; font-size: 11px; word-break: break-all;">
             {{ log.logger_name }}
           </td>
           <td>
-            <div class="log-msg-text">{{ formatMsg(log.message) }}</div>
+            <!-- SQL 语句渲染 -->
+            <div v-if="log.is_sql || log.level === 'SQL'" class="sql-log-item">
+              <div class="sql-meta-header">
+                <CostBadge :costMs="log.exec_time_ms || 0" />
+                <span v-if="log.result_rows !== undefined" class="rows-tag">影响 {{ log.result_rows }} 行</span>
+              </div>
+              <SqlCodeBox :code="log.message" @toast="$emit('toast', $event)" />
+            </div>
+
+            <!-- 普通日志正文 & 异常堆栈渲染 -->
+            <div v-else class="log-msg-text">
+              <div>{{ log.message }}</div>
+              <div v-if="log.has_stack && log.stack_trace" class="stack-box">
+                <div class="stack-toggle" @click="toggleStack(idx)">
+                  {{ expandedStacks[idx] ? '▼ 折叠堆栈' : '▶ 展开堆栈 (' + countStackLines(log.stack_trace) + ' 行)' }}
+                </div>
+                <pre v-if="expandedStacks[idx]" class="stack-trace">{{ log.stack_trace }}</pre>
+              </div>
+            </div>
           </td>
           <td class="col-nowrap">
             <SourceLink :sourceFile="log.source_file" :lineNumber="log.line_number" @toast="$emit('toast', $event)" />
@@ -128,17 +156,20 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
-import { AppLogRecord } from '../types';
 import Pagination from '../components/Pagination.vue';
 import SourceLink from '../components/SourceLink.vue';
+import CostBadge from '../components/CostBadge.vue';
+import SqlCodeBox from '../components/SqlCodeBox.vue';
 
 const emit = defineEmits<{
   (e: 'update-stats', stats: any, label: string): void;
+  (e: 'jump-tab', tab: string, traceId?: string): void;
   (e: 'toast', msg: string): void;
 }>();
 
-const logs = ref<AppLogRecord[]>([]);
+const logs = ref<any[]>([]);
 const spans = ref<{ span_id: string; parent_span_id: string; log_count: number }[]>([]);
+const hasPerfTree = ref(false);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(50);
@@ -147,6 +178,7 @@ const spanId = ref('');
 const level = ref('');
 const keyword = ref('');
 const loading = ref(false);
+const expandedStacks = ref<{ [key: number]: boolean }>({});
 
 async function loadLogs(p = 1) {
   page.value = p;
@@ -164,6 +196,7 @@ async function loadLogs(p = 1) {
       logs.value = res.data;
       total.value = res.total;
       spans.value = res.spans || [];
+      hasPerfTree.value = Boolean(res.hasPerfTree);
       emit('update-stats', { total: res.total }, `📜 纯净日志透视 (${traceId.value || '全量'})`);
     }
   } finally {
@@ -173,20 +206,28 @@ async function loadLogs(p = 1) {
 
 function getLevelClass(lvl: string) {
   const l = (lvl || '').toUpperCase();
+  if (l === 'SQL') return 'level-sql';
   if (l === 'ERROR') return 'level-error';
   if (l === 'WARN') return 'level-warn';
   if (l === 'INFO') return 'level-info';
   return 'level-debug';
 }
 
-function formatMsg(msg: string) {
-  return msg || '';
+function countStackLines(stack: string) {
+  if (!stack) return 0;
+  return stack.split('\n').length;
 }
 
-function formatSource(file: string, line: number) {
-  if (!file) return '';
-  const base = file.split(/[\\/]/).pop();
-  return `${base}:${line}`;
+function toggleStack(idx: number) {
+  expandedStacks.value[idx] = !expandedStacks.value[idx];
+}
+
+function expandAllStacks(expand: boolean) {
+  const next: { [key: number]: boolean } = {};
+  logs.value.forEach((log, idx) => {
+    if (log.has_stack) next[idx] = expand;
+  });
+  expandedStacks.value = next;
 }
 
 function setTrace(tId: string, sId?: string) {
@@ -196,13 +237,11 @@ function setTrace(tId: string, sId?: string) {
 }
 
 function copyLogs() {
-  const text = logs.value.map(l => `${l.log_time} [${l.level}] [${l.trace_id}] [${l.span_id}] ${l.logger_name} - ${l.message}`).join('\n');
+  const text = logs.value
+    .map(l => `${l.log_time} [${l.level}] [${l.trace_id}] [${l.span_id}] ${l.logger_name} - ${l.message}`)
+    .join('\n');
   navigator.clipboard.writeText(text);
-  emit('toast', '已复制当前页日志至剪贴板');
-}
-
-function expandAllStacks(expand: boolean) {
-  // 多行展示
+  emit('toast', '已复制当前筛选日志至剪贴板');
 }
 
 onMounted(() => {
@@ -216,155 +255,199 @@ defineExpose({
 </script>
 
 <style scoped>
-.tab-panel {
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-  box-shadow: var(--shadow);
-}
 .toolbar {
   display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 6px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.input-group input,
+.input-group select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #ffffff;
 }
 .toolbar-right {
   margin-left: auto;
   display: flex;
-  gap: 4px;
-  align-items: center;
-}
-.input-group {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 12px;
 }
-.input-group input, .input-group select {
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 12px;
-  color: var(--text);
-}
-.span-strip {
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 12px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.span-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 12px;
+.btn-action {
+  height: 28px;
+  padding: 0 10px;
   font-size: 11.5px;
+  font-weight: 500;
+  border: 1px solid #cbd5e1;
   background: #ffffff;
-  border: 1px solid var(--border);
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.span-pill:hover, .span-pill.active {
+.btn-action:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+.btn-perf {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+  font-weight: 600;
+}
+.btn-perf:hover {
+  background: #dcfce7;
+  border-color: #4ade80;
+}
+
+.span-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+.span-pill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.span-pill:hover {
+  border-color: #0284c7;
+  color: #0284c7;
+}
+.span-pill.active {
   background: #0284c7;
   color: #ffffff;
   border-color: #0284c7;
 }
 .span-count {
   font-weight: 700;
-  font-size: 10.5px;
+  opacity: 0.85;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  margin-bottom: 6px;
+
+.nano-time {
+  font-size: 10px;
+  color: #94a3b8;
+  font-family: monospace;
 }
-th, td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-  vertical-align: middle;
-}
-th {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-tr:hover td { background: #f1f5f9; }
-.empty-cell {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 20px;
-}
-.btn-action {
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  background: #ffffff;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.btn-action:hover {
-  background: #e2e8f0;
-  color: var(--accent);
-}
+
 .level-badge {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  font-family: monospace;
+  text-transform: uppercase;
 }
-.level-info { background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; }
-.level-warn { background: #fef3c7; color: #d97706; border: 1px solid #fde68a; }
-.level-error { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
-.level-debug { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
+.level-sql {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+.level-error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+.level-warn {
+  background: #fffbeb;
+  color: #d97706;
+  border: 1px solid #fde68a;
+}
+.level-info {
+  background: #f0f9ff;
+  color: #0284c7;
+  border: 1px solid #bae6fd;
+}
+.level-debug {
+  background: #f8fafc;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
 .span-tag {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
   font-family: monospace;
-  background: #ede9fe;
-  color: #7c3aed;
-  border: 1px solid #ddd6fe;
+  font-size: 11px;
+  color: #0284c7;
   cursor: pointer;
+  text-decoration: underline;
 }
+.span-tag:hover {
+  color: #0369a1;
+}
+
+.sql-log-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sql-meta-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rows-tag {
+  font-size: 10.5px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.row-sql {
+  background: #fcfdfd;
+}
+
 .log-msg-text {
-  font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 11.5px;
-  color: #1e293b;
+  line-height: 1.45;
   word-break: break-all;
   white-space: pre-wrap;
-  line-height: 1.45;
-  max-height: 160px;
+}
+
+.stack-box {
+  margin-top: 4px;
+}
+.stack-toggle {
+  font-size: 11px;
+  color: #dc2626;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stack-toggle:hover {
+  text-decoration: underline;
+}
+.stack-trace {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  color: #991b1b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
   overflow-y: auto;
 }
-.nano-time {
-  font-size: 10.5px;
-  color: #94a3b8;
-}
-.col-nowrap { white-space: nowrap; }
-.col-time { white-space: nowrap; font-size: 12px; font-family: monospace; }
 </style>

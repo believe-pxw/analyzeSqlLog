@@ -122,7 +122,7 @@ export class AppLogDao {
     page = 1,
     pageSize = 50,
     filters: { traceId?: string; spanId?: string; level?: string; serviceName?: string; loggerName?: string; keyword?: string } = {}
-  ): Promise<{ data: AppLogRecord[]; total: number; spans: { span_id: string; parent_span_id: string; log_count: number }[] }> {
+  ): Promise<{ data: any[]; total: number; spans: { span_id: string; parent_span_id: string; log_count: number }[]; hasPerfTree?: boolean }> {
     // 触发按需惰性装载
     if (filters.traceId) {
       await this.ensureTraceLogsLoaded(filters.traceId);
@@ -139,7 +139,7 @@ export class AppLogDao {
       whereClause += ' AND span_id = ?';
       params.push(filters.spanId);
     }
-    if (filters.level) {
+    if (filters.level && filters.level !== 'SQL') {
       whereClause += ' AND level = ?';
       params.push(filters.level.toUpperCase());
     }
@@ -156,20 +156,74 @@ export class AppLogDao {
       params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
     }
 
-    const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
-    const countRes = await this.db.query<any>(countSql, params);
-    const total = Number(countRes[0]?.total || 0);
+    // 1. 查询常规应用日志
+    let appLogRows: any[] = [];
+    let totalAppLogs = 0;
 
+    if (!filters.level || filters.level !== 'SQL') {
+      const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
+      const countRes = await this.db.query<any>(countSql, params);
+      totalAppLogs = Number(countRes[0]?.total || 0);
+
+      const listSql = `
+        SELECT * FROM app_logs
+        ${whereClause}
+        ORDER BY id ASC, log_time ASC
+      `;
+      appLogRows = await this.db.query<any>(listSql, params);
+    }
+
+    // 2. 如果指定了 TraceID，同时查出该 Trace 下的 SQL 记录进行归并
+    let sqlRows: any[] = [];
+    if (filters.traceId && (!filters.level || filters.level === 'SQL')) {
+      let sqlWhere = 'WHERE trace_id = ?';
+      const sqlParams: any[] = [filters.traceId];
+      if (filters.keyword) {
+        sqlWhere += ' AND (sql_template ILIKE ? OR full_sql ILIKE ?)';
+        sqlParams.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
+      }
+      const rawSqls = await this.db.query<any>(`SELECT * FROM sqllogs ${sqlWhere} ORDER BY log_time ASC, id ASC`, sqlParams);
+      sqlRows = rawSqls.map(r => ({
+        id: -r.id,
+        log_time: r.log_time,
+        nano_time: r.nano_time || '',
+        level: 'SQL',
+        service_name: r.db_manager ? r.db_manager.replace(/^.*dbmanager\./, '') : 'DB',
+        instance_name: '-',
+        ip_address: '-',
+        host_name: '-',
+        trace_id: r.trace_id,
+        span_id: r.span_id || '-',
+        parent_span_id: '-',
+        thread_name: r.thread_name || '-',
+        logger_name: r.db_manager || 'PreparedStatementWithLog',
+        message: r.full_sql || r.sql_template,
+        stack_trace: '',
+        has_stack: false,
+        line_number: r.line_number || 0,
+        source_file: r.source_file || '',
+        is_sql: true,
+        exec_time_ms: r.exec_time_ms,
+        result_rows: r.result_rows
+      }));
+    }
+
+    // 3. 归并两类日志流并按执行时间升序排序
+    const allCombined = [...appLogRows, ...sqlRows];
+    allCombined.sort((a, b) => {
+      const timeComp = (a.log_time || '').localeCompare(b.log_time || '');
+      if (timeComp !== 0) return timeComp;
+      return (a.id || 0) - (b.id || 0);
+    });
+
+    const total = allCombined.length;
     const offset = (page - 1) * pageSize;
-    const listSql = `
-      SELECT * FROM app_logs
-      ${whereClause}
-      ORDER BY id ASC, log_time ASC
-      LIMIT ? OFFSET ?
-    `;
-    const rows = await this.db.query<any>(listSql, [...params, pageSize, offset]);
+    const paginatedData = allCombined.slice(offset, offset + pageSize);
 
+    // 4. 计算 Span 列表
     let spans: any[] = [];
+    let hasPerfTree = false;
+
     if (filters.traceId) {
       const spanSql = `
         SELECT span_id, parent_span_id, COUNT(*) as log_count
@@ -179,16 +233,21 @@ export class AppLogDao {
         ORDER BY MIN(id) ASC
       `;
       spans = await this.db.query<any>(spanSql, [filters.traceId]);
+
+      // 检测该 Trace 是否存在性能树 (ActionRecorder)
+      const perfCheck = await this.db.query<any>('SELECT COUNT(*) as cnt FROM perf_traces WHERE trace_id = ?', [filters.traceId]);
+      hasPerfTree = Number(perfCheck[0]?.cnt || 0) > 0;
     }
 
     return {
-      data: rows,
+      data: paginatedData,
       total,
       spans: spans.map(s => ({
         span_id: s.span_id,
         parent_span_id: s.parent_span_id,
         log_count: Number(s.log_count)
-      }))
+      })),
+      hasPerfTree
     };
   }
 
