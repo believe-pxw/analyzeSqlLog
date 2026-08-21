@@ -109,9 +109,7 @@ export async function main() {
   createServer(db, parseResult, 3000);
 }
 
-if (require.main === module) {
-  main().catch(err => {
-    console.error('❌ 发生异常错误:', err);
-    process.exit(1);
-  });
-}
+main().catch(err => {
+  console.error('❌ 发生异常错误:', err);
+  process.exit(1);
+});

@@ -2018,12 +2018,10 @@ async function main() {
   }
   createServer(db, parseResult, 3e3);
 }
-if (require.main === module) {
-  main().catch((err) => {
-    console.error("\u274C \u53D1\u751F\u5F02\u5E38\u9519\u8BEF:", err);
-    process.exit(1);
-  });
-}
+main().catch((err) => {
+  console.error("\u274C \u53D1\u751F\u5F02\u5E38\u9519\u8BEF:", err);
+  process.exit(1);
+});
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   main
