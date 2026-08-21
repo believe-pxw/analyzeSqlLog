@@ -9,6 +9,7 @@ import { cleanSqlText, parseTimeToMs } from './sqlParser';
 import { parseActionLine, calculatePerfTraceMetrics, ParsedActionItem } from './perfParser';
 import { SqlRecord } from '../types/sql';
 import { AppLogRecord, LogHeader } from '../types/log';
+import { LogTraceStub } from '../types/stub';
 
 export interface ParseResult {
   totalFiles: number;
@@ -16,12 +17,14 @@ export interface ParseResult {
   totalRecords: number;
   totalPerfTraces: number;
   totalAppLogs: number;
+  traceStubs?: LogTraceStub[];
   costMs?: number;
 }
 
 export type RecordCallback = (record: SqlRecord) => Promise<any> | void;
 export type PerfTraceCallback = (perfData: { trace: any; actions: any[] }) => Promise<any> | void;
 export type AppLogCallback = (appLog: AppLogRecord) => Promise<any> | void;
+export type StubCallback = (stub: LogTraceStub) => Promise<any> | void;
 
 /**
  * 极速流式单文件解析器 (同时支持 SQL 日志、ActionRecorder 性能日志与通用应用日志)
@@ -32,8 +35,9 @@ export async function parseLogFile(
   startRecordId = 0,
   onPerfTrace?: PerfTraceCallback | null,
   onAppLog?: AppLogCallback | null,
-  startAppLogId = 0
-): Promise<{ totalLines: number; totalRecords: number; totalPerfTraces: number; totalAppLogs: number }> {
+  startAppLogId = 0,
+  onStub?: StubCallback | null
+): Promise<{ totalLines: number; totalRecords: number; totalPerfTraces: number; totalAppLogs: number; traceStubs: LogTraceStub[] }> {
   let inputStream: NodeJS.ReadableStream;
   if (filePath.endsWith('.gz')) {
     inputStream = fs.createReadStream(filePath).pipe(zlib.createGunzip());
@@ -50,6 +54,7 @@ export async function parseLogFile(
   let totalRecords = startRecordId;
   let totalPerfTraces = 0;
   let totalAppLogs = startAppLogId;
+  const stubsMap = new Map<string, LogTraceStub>();
 
   let currentRecord: any = null;
   let currentAppLog: any = null;
@@ -83,20 +88,17 @@ export async function parseLogFile(
   let lastPerfAction: ParsedActionItem | null = null;
   const seenPerfTraceIds = new Set<string>();
 
-  function allocateUniquePerfTraceId(traceId: string, spanId: string): string {
-    let candidate = traceId && traceId !== '-' ? traceId : spanId;
-    if (!candidate || candidate === '-') candidate = 'perf_trace';
-
-    let uniqueId = candidate;
+  function allocateUniquePerfTraceId(baseTraceId: string, spanId: string): string {
+    let uniqueId = baseTraceId;
     if (seenPerfTraceIds.has(uniqueId)) {
-      if (spanId && spanId !== '-' && spanId !== candidate && !seenPerfTraceIds.has(spanId)) {
+      if (spanId && spanId !== '-' && !seenPerfTraceIds.has(spanId)) {
         uniqueId = spanId;
       } else {
-        let counter = 2;
-        while (seenPerfTraceIds.has(`${candidate}_#${counter}`)) {
-          counter++;
+        let suffix = 2;
+        while (seenPerfTraceIds.has(`${baseTraceId}_#${suffix}`)) {
+          suffix++;
         }
-        uniqueId = `${candidate}_#${counter}`;
+        uniqueId = `${baseTraceId}_#${suffix}`;
       }
     }
     seenPerfTraceIds.add(uniqueId);
@@ -199,6 +201,32 @@ export async function parseLogFile(
       await flushAppLog();
 
       lastHeaderInfo = parseLogHeader(line);
+
+      // 记录轻量 Trace 与 Span 的起止行号存根
+      if (lastHeaderInfo.traceId && lastHeaderInfo.traceId !== '-' && lastHeaderInfo.traceId !== '') {
+        let stub = stubsMap.get(lastHeaderInfo.traceId);
+        if (!stub) {
+          stub = {
+            trace_id: lastHeaderInfo.traceId,
+            source_file: path.resolve(filePath),
+            start_line: totalLines,
+            end_line: totalLines,
+            log_time: lastHeaderInfo.logTime,
+            spans: {},
+          };
+          stubsMap.set(lastHeaderInfo.traceId, stub);
+        } else {
+          stub.end_line = totalLines;
+        }
+
+        if (lastHeaderInfo.spanId && lastHeaderInfo.spanId !== '-' && lastHeaderInfo.spanId !== '') {
+          if (!stub.spans[lastHeaderInfo.spanId]) {
+            stub.spans[lastHeaderInfo.spanId] = { start_line: totalLines, end_line: totalLines };
+          } else {
+            stub.spans[lastHeaderInfo.spanId].end_line = totalLines;
+          }
+        }
+      }
 
       if (onAppLog) {
         currentAppLog = {
@@ -483,7 +511,22 @@ export async function parseLogFile(
   await flushPerfTrace();
   await flushAppLog();
 
-  return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces, totalAppLogs: totalAppLogs - startAppLogId };
+  if (onStub) {
+    for (const stub of stubsMap.values()) {
+      const res = onStub(stub);
+      if (res && typeof res.then === 'function') {
+        await res;
+      }
+    }
+  }
+
+  return {
+    totalLines,
+    totalRecords: totalRecords - startRecordId,
+    totalPerfTraces,
+    totalAppLogs: totalAppLogs - startAppLogId,
+    traceStubs: Array.from(stubsMap.values()),
+  };
 }
 
 /**
@@ -493,9 +536,11 @@ export async function parseLogs(
   targetPath: string,
   onRecord?: RecordCallback | null,
   onPerfTrace?: PerfTraceCallback | null,
-  onAppLog?: AppLogCallback | null
+  onAppLog?: AppLogCallback | null,
+  onStub?: StubCallback | null
 ): Promise<ParseResult> {
   const files: string[] = [];
+  const allStubs: LogTraceStub[] = [];
 
   function collectFiles(dirOrFilePath: string): void {
     const stat = fs.statSync(dirOrFilePath);
@@ -525,7 +570,7 @@ export async function parseLogs(
   }
 
   if (files.length === 0) {
-    return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0, totalAppLogs: 0 };
+    return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0, totalAppLogs: 0, traceStubs: [] };
   }
 
   const cpuCount = os.cpus() ? os.cpus().length : 4;
@@ -538,7 +583,10 @@ export async function parseLogs(
     let grandTotalAppLogs = 0;
 
     for (const file of files) {
-      const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace, onAppLog, grandTotalAppLogs);
+      const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace, onAppLog, grandTotalAppLogs, stub => {
+        allStubs.push(stub);
+        if (onStub) onStub(stub);
+      });
       grandTotalLines += result.totalLines;
       grandTotalRecords += result.totalRecords;
       grandTotalPerfTraces += result.totalPerfTraces || 0;
@@ -551,6 +599,7 @@ export async function parseLogs(
       totalRecords: grandTotalRecords,
       totalPerfTraces: grandTotalPerfTraces,
       totalAppLogs: grandTotalAppLogs,
+      traceStubs: allStubs,
     };
   }
 
@@ -568,7 +617,10 @@ export async function parseLogs(
       let grandTotalAppLogs = 0;
 
       for (const file of files) {
-        const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace, onAppLog);
+        const result = await parseLogFile(file, onRecord, grandTotalRecords, onPerfTrace, onAppLog, 0, stub => {
+          allStubs.push(stub);
+          if (onStub) onStub(stub);
+        });
         grandTotalLines += result.totalLines;
         grandTotalRecords += result.totalRecords;
         grandTotalPerfTraces += result.totalPerfTraces || 0;
@@ -581,6 +633,7 @@ export async function parseLogs(
         totalRecords: grandTotalRecords,
         totalPerfTraces: grandTotalPerfTraces,
         totalAppLogs: grandTotalAppLogs,
+        traceStubs: allStubs,
       };
     }
   }
@@ -597,8 +650,6 @@ export async function parseLogs(
     return new Promise<void>((resolve, reject) => {
       if (workerFiles.length === 0) return resolve();
 
-      // 在编译或运行时均可安全加载 worker 脚本
-      const workerScript = path.resolve(__dirname, 'worker.js');
       const worker = new Worker(workerScript, {
         workerData: { files: workerFiles, hasAppLogCallback: !!onAppLog },
       });
@@ -644,6 +695,12 @@ export async function parseLogs(
               }
             }
           });
+        } else if (msg.type === 'trace_stubs') {
+          const stubs: LogTraceStub[] = msg.stubs;
+          stubs.forEach(s => {
+            allStubs.push(s);
+            if (onStub) onStub(s);
+          });
         } else if (msg.type === 'done') {
           pendingBatchPromise.then(() => {
             grandTotalLines += msg.totalLines;
@@ -667,9 +724,12 @@ export async function parseLogs(
     totalRecords: grandTotalRecords,
     totalPerfTraces: grandTotalPerfTraces,
     totalAppLogs: grandTotalAppLogs,
+    traceStubs: allStubs,
   };
 }
 
 export * from './header';
 export * from './sqlParser';
 export * from './perfParser';
+export * from './logExtractor';
+

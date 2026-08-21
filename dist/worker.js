@@ -236,7 +236,7 @@ function calculatePerfTraceMetrics(traceId, logTime, threadName, sourceFile, lin
 }
 
 // src/parser/index.ts
-async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, onAppLog, startAppLogId = 0) {
+async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, onAppLog, startAppLogId = 0, onStub) {
   let inputStream;
   if (filePath.endsWith(".gz")) {
     inputStream = import_fs.default.createReadStream(filePath).pipe(import_zlib.default.createGunzip());
@@ -251,6 +251,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   let totalRecords = startRecordId;
   let totalPerfTraces = 0;
   let totalAppLogs = startAppLogId;
+  const stubsMap = /* @__PURE__ */ new Map();
   let currentRecord = null;
   let currentAppLog = null;
   let captureState = null;
@@ -273,19 +274,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   let currentPerfTrace = null;
   let lastPerfAction = null;
   const seenPerfTraceIds = /* @__PURE__ */ new Set();
-  function allocateUniquePerfTraceId(traceId, spanId) {
-    let candidate = traceId && traceId !== "-" ? traceId : spanId;
-    if (!candidate || candidate === "-") candidate = "perf_trace";
-    let uniqueId = candidate;
+  function allocateUniquePerfTraceId(baseTraceId, spanId) {
+    let uniqueId = baseTraceId;
     if (seenPerfTraceIds.has(uniqueId)) {
-      if (spanId && spanId !== "-" && spanId !== candidate && !seenPerfTraceIds.has(spanId)) {
+      if (spanId && spanId !== "-" && !seenPerfTraceIds.has(spanId)) {
         uniqueId = spanId;
       } else {
-        let counter = 2;
-        while (seenPerfTraceIds.has(`${candidate}_#${counter}`)) {
-          counter++;
+        let suffix = 2;
+        while (seenPerfTraceIds.has(`${baseTraceId}_#${suffix}`)) {
+          suffix++;
         }
-        uniqueId = `${candidate}_#${counter}`;
+        uniqueId = `${baseTraceId}_#${suffix}`;
       }
     }
     seenPerfTraceIds.add(uniqueId);
@@ -364,6 +363,29 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
       await flushCurrent();
       await flushAppLog();
       lastHeaderInfo = parseLogHeader(line);
+      if (lastHeaderInfo.traceId && lastHeaderInfo.traceId !== "-" && lastHeaderInfo.traceId !== "") {
+        let stub = stubsMap.get(lastHeaderInfo.traceId);
+        if (!stub) {
+          stub = {
+            trace_id: lastHeaderInfo.traceId,
+            source_file: import_path.default.resolve(filePath),
+            start_line: totalLines,
+            end_line: totalLines,
+            log_time: lastHeaderInfo.logTime,
+            spans: {}
+          };
+          stubsMap.set(lastHeaderInfo.traceId, stub);
+        } else {
+          stub.end_line = totalLines;
+        }
+        if (lastHeaderInfo.spanId && lastHeaderInfo.spanId !== "-" && lastHeaderInfo.spanId !== "") {
+          if (!stub.spans[lastHeaderInfo.spanId]) {
+            stub.spans[lastHeaderInfo.spanId] = { start_line: totalLines, end_line: totalLines };
+          } else {
+            stub.spans[lastHeaderInfo.spanId].end_line = totalLines;
+          }
+        }
+      }
       if (onAppLog) {
         currentAppLog = {
           id: 0,
@@ -612,7 +634,21 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   await flushCurrent();
   await flushPerfTrace();
   await flushAppLog();
-  return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces, totalAppLogs: totalAppLogs - startAppLogId };
+  if (onStub) {
+    for (const stub of stubsMap.values()) {
+      const res = onStub(stub);
+      if (res && typeof res.then === "function") {
+        await res;
+      }
+    }
+  }
+  return {
+    totalLines,
+    totalRecords: totalRecords - startRecordId,
+    totalPerfTraces,
+    totalAppLogs: totalAppLogs - startAppLogId,
+    traceStubs: Array.from(stubsMap.values())
+  };
 }
 
 // src/parser/worker.ts
@@ -623,6 +659,7 @@ if (import_worker_threads.parentPort && import_worker_threads.workerData) {
     const WORKER_BATCH_SIZE = 1e4;
     let workerAppLogBatch = [];
     const WORKER_APP_LOG_BATCH_SIZE = 5e3;
+    let workerStubs = [];
     let totalWorkerLines = 0;
     for (const file of files) {
       const result = await parseLogFile(
@@ -644,7 +681,11 @@ if (import_worker_threads.parentPort && import_worker_threads.workerData) {
             import_worker_threads.parentPort.postMessage({ type: "app_log_batch", records: workerAppLogBatch });
             workerAppLogBatch = [];
           }
-        } : null
+        } : null,
+        0,
+        (stub) => {
+          workerStubs.push(stub);
+        }
       );
       totalWorkerLines += result.totalLines;
     }
@@ -653,6 +694,9 @@ if (import_worker_threads.parentPort && import_worker_threads.workerData) {
     }
     if (workerAppLogBatch.length > 0) {
       import_worker_threads.parentPort.postMessage({ type: "app_log_batch", records: workerAppLogBatch });
+    }
+    if (workerStubs.length > 0) {
+      import_worker_threads.parentPort.postMessage({ type: "trace_stubs", stubs: workerStubs });
     }
     import_worker_threads.parentPort.postMessage({ type: "done", totalLines: totalWorkerLines });
   })().catch((err) => {

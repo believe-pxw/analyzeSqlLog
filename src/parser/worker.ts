@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'worker_threads';
 import { parseLogFile } from './index';
 import { SqlRecord } from '../types/sql';
 import { AppLogRecord } from '../types/log';
+import { LogTraceStub } from '../types/stub';
 
 if (parentPort && workerData) {
   (async () => {
@@ -12,6 +13,7 @@ if (parentPort && workerData) {
     let workerAppLogBatch: AppLogRecord[] = [];
     const WORKER_APP_LOG_BATCH_SIZE = 5000;
 
+    let workerStubs: LogTraceStub[] = [];
     let totalWorkerLines = 0;
 
     for (const file of files) {
@@ -36,7 +38,11 @@ if (parentPort && workerData) {
                 workerAppLogBatch = [];
               }
             }
-          : null
+          : null,
+        0,
+        stub => {
+          workerStubs.push(stub);
+        }
       );
       totalWorkerLines += result.totalLines;
     }
@@ -46,6 +52,9 @@ if (parentPort && workerData) {
     }
     if (workerAppLogBatch.length > 0) {
       parentPort!.postMessage({ type: 'app_log_batch', records: workerAppLogBatch });
+    }
+    if (workerStubs.length > 0) {
+      parentPort!.postMessage({ type: 'trace_stubs', stubs: workerStubs });
     }
 
     parentPort!.postMessage({ type: 'done', totalLines: totalWorkerLines });

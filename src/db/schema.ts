@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS app_logs (
     thread_name VARCHAR,
     logger_name VARCHAR,
     message VARCHAR,
+    stack_trace VARCHAR,
+    has_stack BOOLEAN,
     line_number INTEGER,
     source_file VARCHAR
 );

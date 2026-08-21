@@ -33,8 +33,8 @@ __export(cli_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(cli_exports);
-var import_path7 = __toESM(require("path"));
-var import_fs7 = __toESM(require("fs"));
+var import_path8 = __toESM(require("path"));
+var import_fs8 = __toESM(require("fs"));
 
 // src/db/connection.ts
 var import_duckdb = __toESM(require("duckdb"));
@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS app_logs (
     thread_name VARCHAR,
     logger_name VARCHAR,
     message VARCHAR,
+    stack_trace VARCHAR,
+    has_stack BOOLEAN,
     line_number INTEGER,
     source_file VARCHAR
 );
@@ -798,194 +800,15 @@ var PerfDao = class {
 };
 
 // src/db/appLogDao.ts
-var import_fs3 = __toESM(require("fs"));
-var import_path3 = __toESM(require("path"));
-var import_os3 = __toESM(require("os"));
-var AppLogDao = class {
-  constructor(db) {
-    this.db = db;
-  }
-  db;
-  async insertAppLogsBatch(records) {
-    if (!records || records.length === 0) return;
-    return this.db.runSerial(async () => {
-      await this._doInsertAppLogsBatch(records);
-    });
-  }
-  async _doInsertAppLogsBatch(records) {
-    const tmpFile = import_path3.default.join(import_os3.default.tmpdir(), `duckdb_app_logs_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
-    try {
-      const jsonLines = records.map((r) => JSON.stringify({
-        id: r.id || 0,
-        log_time: r.log_time || "",
-        nano_time: r.nano_time || "",
-        level: r.level || "INFO",
-        service_name: r.service_name || "-",
-        instance_name: r.instance_name || "-",
-        ip_address: r.ip_address || "-",
-        host_name: r.host_name || "-",
-        trace_id: r.trace_id || "-",
-        span_id: r.span_id || "-",
-        parent_span_id: r.parent_span_id || "-",
-        thread_name: r.thread_name || "-",
-        logger_name: r.logger_name || "",
-        message: r.message || "",
-        line_number: r.line_number || 0,
-        source_file: r.source_file || ""
-      })).join("\n");
-      await import_fs3.default.promises.writeFile(tmpFile, jsonLines, "utf-8");
-      const normPath = tmpFile.replace(/\\/g, "/");
-      const sql = `
-        INSERT INTO app_logs (
-          id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
-          trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, line_number, source_file
-        )
-        SELECT 
-          id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
-          trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, line_number, source_file
-        FROM read_json_auto('${normPath}', format='newline_delimited');
-      `;
-      await this.db.exec(sql);
-    } finally {
-      import_fs3.default.unlink(tmpFile, () => {
-      });
-    }
-  }
-  async getAppLogs(page = 1, pageSize = 50, filters = {}) {
-    let whereClause = "WHERE 1=1";
-    const params = [];
-    if (filters.traceId) {
-      whereClause += " AND trace_id = ?";
-      params.push(filters.traceId);
-    }
-    if (filters.spanId) {
-      whereClause += " AND span_id = ?";
-      params.push(filters.spanId);
-    }
-    if (filters.level) {
-      whereClause += " AND level = ?";
-      params.push(filters.level.toUpperCase());
-    }
-    if (filters.serviceName) {
-      whereClause += " AND service_name = ?";
-      params.push(filters.serviceName);
-    }
-    if (filters.loggerName) {
-      whereClause += " AND logger_name ILIKE ?";
-      params.push(`%${filters.loggerName}%`);
-    }
-    if (filters.keyword) {
-      whereClause += " AND (message ILIKE ? OR logger_name ILIKE ?)";
-      params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
-    }
-    const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
-    const countRes = await this.db.query(countSql, params);
-    const total = Number(countRes[0]?.total || 0);
-    const offset = (page - 1) * pageSize;
-    const listSql = `
-      SELECT * FROM app_logs
-      ${whereClause}
-      ORDER BY id ASC
-      LIMIT ? OFFSET ?
-    `;
-    const rows = await this.db.query(listSql, [...params, pageSize, offset]);
-    let spans = [];
-    if (filters.traceId) {
-      const spanSql = `
-        SELECT span_id, parent_span_id, COUNT(*) as log_count
-        FROM app_logs
-        WHERE trace_id = ? AND span_id IS NOT NULL AND span_id != '-'
-        GROUP BY span_id, parent_span_id
-        ORDER BY MIN(id) ASC
-      `;
-      spans = await this.db.query(spanSql, [filters.traceId]);
-    }
-    return {
-      data: rows,
-      total,
-      spans: spans.map((s) => ({
-        span_id: s.span_id,
-        parent_span_id: s.parent_span_id,
-        log_count: Number(s.log_count)
-      }))
-    };
-  }
-};
-
-// src/db/index.ts
-var SqlLogDatabase = class {
-  db;
-  sqlDao;
-  perfDao;
-  appLogDao;
-  constructor(dbPath = ":memory:") {
-    this.db = new DbConnection(dbPath);
-    this.sqlDao = new SqlDao(this.db);
-    this.perfDao = new PerfDao(this.db);
-    this.appLogDao = new AppLogDao(this.db);
-  }
-  async initSchema() {
-    return this.db.initSchema();
-  }
-  query(sql, params = []) {
-    return this.db.query(sql, params);
-  }
-  // SQL 相关
-  async insertBatch(records) {
-    return this.sqlDao.insertBatch(records);
-  }
-  async getTotalSummary() {
-    return this.sqlDao.getTotalSummary();
-  }
-  async getTopRepeated(page = 1, pageSize = 20, keyword = "") {
-    return this.sqlDao.getTopRepeated(page, pageSize, keyword);
-  }
-  async getTopSlow(page = 1, pageSize = 20, traceId = "", minCostMs = 0, keyword = "") {
-    return this.sqlDao.getTopSlow(page, pageSize, traceId, minCostMs, keyword);
-  }
-  async getDiagnostics(traceId = "", page = 1, pageSize = 20, minRepeatCount = 5, keyword = "") {
-    return this.sqlDao.getDiagnostics(traceId, page, pageSize, minRepeatCount, keyword);
-  }
-  async getTraceSummaryList(page = 1, pageSize = 20, keyword = "", minCostMs = 0) {
-    return this.sqlDao.getTraceSummaryList(page, pageSize, keyword, minCostMs);
-  }
-  async getTrace(traceId, page = 1, pageSize = 50) {
-    return this.sqlDao.getTrace(traceId, page, pageSize);
-  }
-  async getByTemplate(sqlTemplate, page = 1, pageSize = 50, traceId = "", dbManager = "") {
-    return this.sqlDao.getByTemplate(sqlTemplate, page, pageSize, traceId, dbManager);
-  }
-  // Performance 相关
-  async insertPerfBatch(perfTraceList) {
-    return this.perfDao.insertPerfBatch(perfTraceList);
-  }
-  async getPerformanceTraceList(page = 1, pageSize = 20, keyword = "", minCostMs = 0, serviceName = "") {
-    return this.perfDao.getPerformanceTraceList(page, pageSize, keyword, minCostMs, serviceName);
-  }
-  async getPerformanceTree(traceId) {
-    return this.perfDao.getPerformanceTree(traceId);
-  }
-  // AppLog 相关
-  async insertAppLogsBatch(records) {
-    return this.appLogDao.insertAppLogsBatch(records);
-  }
-  async getAppLogs(page = 1, pageSize = 50, filters = {}) {
-    return this.appLogDao.getAppLogs(page, pageSize, filters);
-  }
-  async close() {
-    return this.db.close();
-  }
-};
-
-// src/parser/index.ts
 var import_fs4 = __toESM(require("fs"));
-var import_readline = __toESM(require("readline"));
 var import_path4 = __toESM(require("path"));
+var import_os3 = __toESM(require("os"));
+
+// src/parser/logExtractor.ts
+var import_fs3 = __toESM(require("fs"));
+var import_readline = __toESM(require("readline"));
 var import_zlib = __toESM(require("zlib"));
-var import_worker_threads = require("worker_threads");
-var import_os4 = __toESM(require("os"));
+var import_path3 = __toESM(require("path"));
 
 // src/parser/header.ts
 function isLogHeader(line) {
@@ -1116,6 +939,351 @@ function cleanSqlText(text) {
   return str.trim();
 }
 
+// src/parser/logExtractor.ts
+async function extractLogLines(sourceFile, startLine, endLine) {
+  const resolvedPath = import_path3.default.resolve(sourceFile);
+  if (!import_fs3.default.existsSync(resolvedPath)) {
+    return [];
+  }
+  let inputStream = import_fs3.default.createReadStream(resolvedPath);
+  if (resolvedPath.endsWith(".gz")) {
+    const gunzip = import_zlib.default.createGunzip();
+    inputStream = inputStream.pipe(gunzip);
+  }
+  const rl = import_readline.default.createInterface({
+    input: inputStream,
+    crlfDelay: Infinity
+  });
+  const records = [];
+  let currentRecord = null;
+  let currentLine = 0;
+  function flushCurrent() {
+    if (currentRecord) {
+      if (currentRecord.message) {
+        currentRecord.message = cleanSqlText(currentRecord.message);
+      }
+      records.push(currentRecord);
+      currentRecord = null;
+    }
+  }
+  for await (const rawLine of rl) {
+    currentLine++;
+    if (currentLine < startLine) {
+      continue;
+    }
+    if (currentLine > endLine && isLogHeader(rawLine)) {
+      flushCurrent();
+      break;
+    }
+    if (isLogHeader(rawLine)) {
+      flushCurrent();
+      const header = parseLogHeader(rawLine);
+      currentRecord = {
+        id: records.length + 1,
+        log_time: header.logTime,
+        nano_time: header.nanoTime,
+        level: header.level,
+        service_name: header.serviceName,
+        instance_name: header.instanceName,
+        ip_address: header.ipAddress,
+        host_name: header.hostName,
+        trace_id: header.traceId,
+        span_id: header.spanId,
+        parent_span_id: header.parentSpanId,
+        thread_name: header.threadName,
+        logger_name: header.loggerName,
+        message: header.message,
+        line_number: currentLine,
+        source_file: resolvedPath
+      };
+    } else if (currentRecord) {
+      const cleaned = rawLine.startsWith(">") ? rawLine.substring(1) : rawLine;
+      if (!currentRecord.stack_trace) {
+        currentRecord.stack_trace = cleaned;
+      } else {
+        currentRecord.stack_trace += "\n" + cleaned;
+      }
+      if (currentRecord.message) {
+        currentRecord.message += "\n" + cleaned;
+      }
+    }
+  }
+  flushCurrent();
+  return records;
+}
+
+// src/db/appLogDao.ts
+var AppLogDao = class {
+  constructor(db) {
+    this.db = db;
+  }
+  db;
+  stubsMap = /* @__PURE__ */ new Map();
+  /**
+   * 注册轻量 Trace 起止行号存根索引
+   */
+  registerTraceStubs(stubs) {
+    if (!stubs || stubs.length === 0) return;
+    for (const stub of stubs) {
+      if (!stub.trace_id || stub.trace_id === "-") continue;
+      const list = this.stubsMap.get(stub.trace_id) || [];
+      list.push(stub);
+      this.stubsMap.set(stub.trace_id, list);
+    }
+  }
+  /**
+   * 获取当前内存中维护的所有 Trace 存根
+   */
+  getTraceStubs() {
+    const all = [];
+    for (const list of this.stubsMap.values()) {
+      all.push(...list);
+    }
+    return all;
+  }
+  /**
+   * 按需惰性装载核心：检查 DuckDB 是否已存在该 traceId 的日志，若无则切片读取文件并写入持久化缓存
+   */
+  async ensureTraceLogsLoaded(traceId) {
+    if (!traceId || traceId === "-") return;
+    const checkSql = "SELECT COUNT(*) as cnt FROM app_logs WHERE trace_id = ?";
+    const checkRes = await this.db.query(checkSql, [traceId]);
+    if (Number(checkRes[0]?.cnt || 0) > 0) {
+      return;
+    }
+    const stubs = this.stubsMap.get(traceId);
+    if (!stubs || stubs.length === 0) {
+      return;
+    }
+    const allExtractedLogs = [];
+    for (const stub of stubs) {
+      const logs = await extractLogLines(stub.source_file, stub.start_line, stub.end_line);
+      allExtractedLogs.push(...logs);
+    }
+    if (allExtractedLogs.length > 0) {
+      await this.insertAppLogsBatch(allExtractedLogs);
+    }
+  }
+  async insertAppLogsBatch(records) {
+    if (!records || records.length === 0) return;
+    return this.db.runSerial(async () => {
+      await this._doInsertAppLogsBatch(records);
+    });
+  }
+  async _doInsertAppLogsBatch(records) {
+    const tmpFile = import_path4.default.join(import_os3.default.tmpdir(), `duckdb_app_logs_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+    try {
+      const jsonLines = records.map((r) => JSON.stringify({
+        id: r.id || 0,
+        log_time: r.log_time || "",
+        nano_time: r.nano_time || "",
+        level: r.level || "INFO",
+        service_name: r.service_name || "-",
+        instance_name: r.instance_name || "-",
+        ip_address: r.ip_address || "-",
+        host_name: r.host_name || "-",
+        trace_id: r.trace_id || "-",
+        span_id: r.span_id || "-",
+        parent_span_id: r.parent_span_id || "-",
+        thread_name: r.thread_name || "-",
+        logger_name: r.logger_name || "",
+        message: r.message || "",
+        stack_trace: r.stack_trace || "",
+        has_stack: Boolean(r.stack_trace && r.stack_trace.length > 0),
+        line_number: r.line_number || 0,
+        source_file: r.source_file || ""
+      })).join("\n");
+      await import_fs4.default.promises.writeFile(tmpFile, jsonLines, "utf-8");
+      const normPath = tmpFile.replace(/\\/g, "/");
+      const sql = `
+        INSERT INTO app_logs (
+          id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
+          trace_id, span_id, parent_span_id, thread_name, logger_name,
+          message, stack_trace, has_stack, line_number, source_file
+        )
+        SELECT 
+          id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
+          trace_id, span_id, parent_span_id, thread_name, logger_name,
+          message, stack_trace, has_stack, line_number, source_file
+        FROM read_json_auto('${normPath}', format='newline_delimited');
+      `;
+      await this.db.exec(sql);
+    } finally {
+      import_fs4.default.unlink(tmpFile, () => {
+      });
+    }
+  }
+  async getAppLogs(page = 1, pageSize = 50, filters = {}) {
+    if (filters.traceId) {
+      await this.ensureTraceLogsLoaded(filters.traceId);
+    }
+    let whereClause = "WHERE 1=1";
+    const params = [];
+    if (filters.traceId) {
+      whereClause += " AND trace_id = ?";
+      params.push(filters.traceId);
+    }
+    if (filters.spanId) {
+      whereClause += " AND span_id = ?";
+      params.push(filters.spanId);
+    }
+    if (filters.level) {
+      whereClause += " AND level = ?";
+      params.push(filters.level.toUpperCase());
+    }
+    if (filters.serviceName) {
+      whereClause += " AND service_name = ?";
+      params.push(filters.serviceName);
+    }
+    if (filters.loggerName) {
+      whereClause += " AND logger_name ILIKE ?";
+      params.push(`%${filters.loggerName}%`);
+    }
+    if (filters.keyword) {
+      whereClause += " AND (message ILIKE ? OR logger_name ILIKE ?)";
+      params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
+    }
+    const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
+    const countRes = await this.db.query(countSql, params);
+    const total = Number(countRes[0]?.total || 0);
+    const offset = (page - 1) * pageSize;
+    const listSql = `
+      SELECT * FROM app_logs
+      ${whereClause}
+      ORDER BY id ASC, log_time ASC
+      LIMIT ? OFFSET ?
+    `;
+    const rows = await this.db.query(listSql, [...params, pageSize, offset]);
+    let spans = [];
+    if (filters.traceId) {
+      const spanSql = `
+        SELECT span_id, parent_span_id, COUNT(*) as log_count
+        FROM app_logs
+        WHERE trace_id = ? AND span_id IS NOT NULL AND span_id != '-'
+        GROUP BY span_id, parent_span_id
+        ORDER BY MIN(id) ASC
+      `;
+      spans = await this.db.query(spanSql, [filters.traceId]);
+    }
+    return {
+      data: rows,
+      total,
+      spans: spans.map((s) => ({
+        span_id: s.span_id,
+        parent_span_id: s.parent_span_id,
+        log_count: Number(s.log_count)
+      }))
+    };
+  }
+  async getTraceSpans(traceId) {
+    if (!traceId || traceId === "-") return [];
+    await this.ensureTraceLogsLoaded(traceId);
+    const sql = `
+      SELECT 
+        span_id, 
+        parent_span_id, 
+        COUNT(*) as log_count,
+        SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as error_count
+      FROM app_logs
+      WHERE trace_id = ? AND span_id IS NOT NULL AND span_id != '-'
+      GROUP BY span_id, parent_span_id
+      ORDER BY MIN(id) ASC
+    `;
+    const rows = await this.db.query(sql, [traceId]);
+    return rows.map((r) => ({
+      span_id: r.span_id,
+      parent_span_id: r.parent_span_id,
+      log_count: Number(r.log_count),
+      error_count: Number(r.error_count || 0)
+    }));
+  }
+};
+
+// src/db/index.ts
+var SqlLogDatabase = class {
+  db;
+  sqlDao;
+  perfDao;
+  appLogDao;
+  constructor(dbPath = ":memory:") {
+    this.db = new DbConnection(dbPath);
+    this.sqlDao = new SqlDao(this.db);
+    this.perfDao = new PerfDao(this.db);
+    this.appLogDao = new AppLogDao(this.db);
+  }
+  async initSchema() {
+    return this.db.initSchema();
+  }
+  query(sql, params = []) {
+    return this.db.query(sql, params);
+  }
+  // SQL 相关
+  async insertBatch(records) {
+    return this.sqlDao.insertBatch(records);
+  }
+  async getTotalSummary() {
+    return this.sqlDao.getTotalSummary();
+  }
+  async getTopRepeated(page = 1, pageSize = 20, keyword = "") {
+    return this.sqlDao.getTopRepeated(page, pageSize, keyword);
+  }
+  async getTopSlow(page = 1, pageSize = 20, traceId = "", minCostMs = 0, keyword = "") {
+    return this.sqlDao.getTopSlow(page, pageSize, traceId, minCostMs, keyword);
+  }
+  async getDiagnostics(traceId = "", page = 1, pageSize = 20, minRepeatCount = 5, keyword = "") {
+    return this.sqlDao.getDiagnostics(traceId, page, pageSize, minRepeatCount, keyword);
+  }
+  async getTraceSummaryList(page = 1, pageSize = 20, keyword = "", minCostMs = 0) {
+    return this.sqlDao.getTraceSummaryList(page, pageSize, keyword, minCostMs);
+  }
+  async getTrace(traceId, page = 1, pageSize = 50) {
+    return this.sqlDao.getTrace(traceId, page, pageSize);
+  }
+  async getByTemplate(sqlTemplate, page = 1, pageSize = 50, traceId = "", dbManager = "") {
+    return this.sqlDao.getByTemplate(sqlTemplate, page, pageSize, traceId, dbManager);
+  }
+  // Performance 相关
+  async insertPerfBatch(perfTraceList) {
+    return this.perfDao.insertPerfBatch(perfTraceList);
+  }
+  async getPerformanceTraceList(page = 1, pageSize = 20, keyword = "", minCostMs = 0, serviceName = "") {
+    return this.perfDao.getPerformanceTraceList(page, pageSize, keyword, minCostMs, serviceName);
+  }
+  async getPerformanceTree(traceId) {
+    return this.perfDao.getPerformanceTree(traceId);
+  }
+  // AppLog 相关与存根管理
+  registerTraceStubs(stubs) {
+    this.appLogDao.registerTraceStubs(stubs);
+  }
+  getTraceStubs() {
+    return this.appLogDao.getTraceStubs();
+  }
+  async ensureTraceLogsLoaded(traceId) {
+    return this.appLogDao.ensureTraceLogsLoaded(traceId);
+  }
+  async insertAppLogsBatch(records) {
+    return this.appLogDao.insertAppLogsBatch(records);
+  }
+  async getAppLogs(page = 1, pageSize = 50, filters = {}) {
+    return this.appLogDao.getAppLogs(page, pageSize, filters);
+  }
+  async getTraceSpans(traceId) {
+    return this.appLogDao.getTraceSpans(traceId);
+  }
+  async close() {
+    return this.db.close();
+  }
+};
+
+// src/parser/index.ts
+var import_fs5 = __toESM(require("fs"));
+var import_readline2 = __toESM(require("readline"));
+var import_path5 = __toESM(require("path"));
+var import_zlib2 = __toESM(require("zlib"));
+var import_worker_threads = require("worker_threads");
+var import_os4 = __toESM(require("os"));
+
 // src/parser/perfParser.ts
 function parseActionLine(line) {
   const cleanLine = line.startsWith(">") ? line.substring(1) : line;
@@ -1192,14 +1360,14 @@ function calculatePerfTraceMetrics(traceId, logTime, threadName, sourceFile, lin
 }
 
 // src/parser/index.ts
-async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, onAppLog, startAppLogId = 0) {
+async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, onAppLog, startAppLogId = 0, onStub) {
   let inputStream;
   if (filePath.endsWith(".gz")) {
-    inputStream = import_fs4.default.createReadStream(filePath).pipe(import_zlib.default.createGunzip());
+    inputStream = import_fs5.default.createReadStream(filePath).pipe(import_zlib2.default.createGunzip());
   } else {
-    inputStream = import_fs4.default.createReadStream(filePath, { encoding: "utf-8", highWaterMark: 1024 * 1024 });
+    inputStream = import_fs5.default.createReadStream(filePath, { encoding: "utf-8", highWaterMark: 1024 * 1024 });
   }
-  const rl = import_readline.default.createInterface({
+  const rl = import_readline2.default.createInterface({
     input: inputStream,
     crlfDelay: Infinity
   });
@@ -1207,6 +1375,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   let totalRecords = startRecordId;
   let totalPerfTraces = 0;
   let totalAppLogs = startAppLogId;
+  const stubsMap = /* @__PURE__ */ new Map();
   let currentRecord = null;
   let currentAppLog = null;
   let captureState = null;
@@ -1229,19 +1398,17 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   let currentPerfTrace = null;
   let lastPerfAction = null;
   const seenPerfTraceIds = /* @__PURE__ */ new Set();
-  function allocateUniquePerfTraceId(traceId, spanId) {
-    let candidate = traceId && traceId !== "-" ? traceId : spanId;
-    if (!candidate || candidate === "-") candidate = "perf_trace";
-    let uniqueId = candidate;
+  function allocateUniquePerfTraceId(baseTraceId, spanId) {
+    let uniqueId = baseTraceId;
     if (seenPerfTraceIds.has(uniqueId)) {
-      if (spanId && spanId !== "-" && spanId !== candidate && !seenPerfTraceIds.has(spanId)) {
+      if (spanId && spanId !== "-" && !seenPerfTraceIds.has(spanId)) {
         uniqueId = spanId;
       } else {
-        let counter = 2;
-        while (seenPerfTraceIds.has(`${candidate}_#${counter}`)) {
-          counter++;
+        let suffix = 2;
+        while (seenPerfTraceIds.has(`${baseTraceId}_#${suffix}`)) {
+          suffix++;
         }
-        uniqueId = `${candidate}_#${counter}`;
+        uniqueId = `${baseTraceId}_#${suffix}`;
       }
     }
     seenPerfTraceIds.add(uniqueId);
@@ -1320,6 +1487,29 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
       await flushCurrent();
       await flushAppLog();
       lastHeaderInfo = parseLogHeader(line);
+      if (lastHeaderInfo.traceId && lastHeaderInfo.traceId !== "-" && lastHeaderInfo.traceId !== "") {
+        let stub = stubsMap.get(lastHeaderInfo.traceId);
+        if (!stub) {
+          stub = {
+            trace_id: lastHeaderInfo.traceId,
+            source_file: import_path5.default.resolve(filePath),
+            start_line: totalLines,
+            end_line: totalLines,
+            log_time: lastHeaderInfo.logTime,
+            spans: {}
+          };
+          stubsMap.set(lastHeaderInfo.traceId, stub);
+        } else {
+          stub.end_line = totalLines;
+        }
+        if (lastHeaderInfo.spanId && lastHeaderInfo.spanId !== "-" && lastHeaderInfo.spanId !== "") {
+          if (!stub.spans[lastHeaderInfo.spanId]) {
+            stub.spans[lastHeaderInfo.spanId] = { start_line: totalLines, end_line: totalLines };
+          } else {
+            stub.spans[lastHeaderInfo.spanId].end_line = totalLines;
+          }
+        }
+      }
       if (onAppLog) {
         currentAppLog = {
           id: 0,
@@ -1337,7 +1527,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
           logger_name: lastHeaderInfo.loggerName,
           message: lastHeaderInfo.message,
           line_number: totalLines,
-          source_file: import_path4.default.resolve(filePath)
+          source_file: import_path5.default.resolve(filePath)
         };
       }
       if (line.includes("com.bokesoft.erp.performance.ActionRecorder")) {
@@ -1351,7 +1541,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
             trace_id: uniqueTraceId,
             log_time: lastHeaderInfo.logTime,
             thread_name: lastHeaderInfo.threadName,
-            source_file: import_path4.default.resolve(filePath),
+            source_file: import_path5.default.resolve(filePath),
             line_number: totalLines,
             actions: []
           };
@@ -1389,7 +1579,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
           sql_params: "",
           full_sql: "",
           line_number: totalLines,
-          source_file: import_path4.default.resolve(filePath)
+          source_file: import_path5.default.resolve(filePath)
         };
       }
       continue;
@@ -1402,7 +1592,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
         const parsedAction = parseActionLine(line);
         if (parsedAction) {
           parsedAction.line_number = totalLines;
-          parsedAction.source_file = import_path4.default.resolve(filePath);
+          parsedAction.source_file = import_path5.default.resolve(filePath);
           if (parsedAction.level === 0 && currentPerfTrace && currentPerfTrace.actions.length > 0) {
             const oldLogTime = currentPerfTrace.log_time;
             const oldThread = currentPerfTrace.thread_name;
@@ -1412,7 +1602,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
               trace_id: uniqueTraceId,
               log_time: oldLogTime,
               thread_name: oldThread,
-              source_file: import_path4.default.resolve(filePath),
+              source_file: import_path5.default.resolve(filePath),
               line_number: totalLines,
               actions: []
             };
@@ -1456,7 +1646,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
           sql_params: "",
           full_sql: "",
           line_number: totalLines,
-          source_file: import_path4.default.resolve(filePath)
+          source_file: import_path5.default.resolve(filePath)
         };
       } else {
         continue;
@@ -1488,7 +1678,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
           sql_params: "",
           full_sql: "",
           line_number: totalLines,
-          source_file: import_path4.default.resolve(filePath)
+          source_file: import_path5.default.resolve(filePath)
         };
       }
       const rowMatch = line.match(/影响行数:\[(\d+)\s*rows\]/i);
@@ -1523,7 +1713,7 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
           sql_params: "",
           full_sql: "",
           line_number: totalLines,
-          source_file: import_path4.default.resolve(filePath)
+          source_file: import_path5.default.resolve(filePath)
         };
       }
       captureState = "sql_template";
@@ -1568,17 +1758,32 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
   await flushCurrent();
   await flushPerfTrace();
   await flushAppLog();
-  return { totalLines, totalRecords: totalRecords - startRecordId, totalPerfTraces, totalAppLogs: totalAppLogs - startAppLogId };
+  if (onStub) {
+    for (const stub of stubsMap.values()) {
+      const res = onStub(stub);
+      if (res && typeof res.then === "function") {
+        await res;
+      }
+    }
+  }
+  return {
+    totalLines,
+    totalRecords: totalRecords - startRecordId,
+    totalPerfTraces,
+    totalAppLogs: totalAppLogs - startAppLogId,
+    traceStubs: Array.from(stubsMap.values())
+  };
 }
-async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
+async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog, onStub) {
   const files = [];
+  const allStubs = [];
   function collectFiles(dirOrFilePath) {
-    const stat = import_fs4.default.statSync(dirOrFilePath);
+    const stat = import_fs5.default.statSync(dirOrFilePath);
     if (stat.isDirectory()) {
-      const entries = import_fs4.default.readdirSync(dirOrFilePath, { withFileTypes: true });
+      const entries = import_fs5.default.readdirSync(dirOrFilePath, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith(".")) continue;
-        const fullPath = import_path4.default.join(dirOrFilePath, entry.name);
+        const fullPath = import_path5.default.join(dirOrFilePath, entry.name);
         if (entry.isDirectory()) {
           collectFiles(fullPath);
         } else if (entry.isFile()) {
@@ -1594,11 +1799,11 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
       files.push(dirOrFilePath);
     }
   }
-  if (import_fs4.default.existsSync(targetPath)) {
+  if (import_fs5.default.existsSync(targetPath)) {
     collectFiles(targetPath);
   }
   if (files.length === 0) {
-    return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0, totalAppLogs: 0 };
+    return { totalFiles: 0, totalLines: 0, totalRecords: 0, totalPerfTraces: 0, totalAppLogs: 0, traceStubs: [] };
   }
   const cpuCount = import_os4.default.cpus() ? import_os4.default.cpus().length : 4;
   const maxWorkers = Math.min(cpuCount, files.length);
@@ -1608,7 +1813,10 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
     let grandTotalPerfTraces2 = 0;
     let grandTotalAppLogs2 = 0;
     for (const file of files) {
-      const result = await parseLogFile(file, onRecord, grandTotalRecords2, onPerfTrace, onAppLog, grandTotalAppLogs2);
+      const result = await parseLogFile(file, onRecord, grandTotalRecords2, onPerfTrace, onAppLog, grandTotalAppLogs2, (stub) => {
+        allStubs.push(stub);
+        if (onStub) onStub(stub);
+      });
       grandTotalLines2 += result.totalLines;
       grandTotalRecords2 += result.totalRecords;
       grandTotalPerfTraces2 += result.totalPerfTraces || 0;
@@ -1619,13 +1827,14 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
       totalLines: grandTotalLines2,
       totalRecords: grandTotalRecords2,
       totalPerfTraces: grandTotalPerfTraces2,
-      totalAppLogs: grandTotalAppLogs2
+      totalAppLogs: grandTotalAppLogs2,
+      traceStubs: allStubs
     };
   }
-  let workerScript = import_path4.default.resolve(__dirname, "worker.js");
-  if (!import_fs4.default.existsSync(workerScript)) {
-    const distWorker = import_path4.default.resolve(__dirname, "../dist/worker.js");
-    if (import_fs4.default.existsSync(distWorker)) {
+  let workerScript = import_path5.default.resolve(__dirname, "worker.js");
+  if (!import_fs5.default.existsSync(workerScript)) {
+    const distWorker = import_path5.default.resolve(__dirname, "../dist/worker.js");
+    if (import_fs5.default.existsSync(distWorker)) {
       workerScript = distWorker;
     } else {
       let grandTotalLines2 = 0;
@@ -1633,7 +1842,10 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
       let grandTotalPerfTraces2 = 0;
       let grandTotalAppLogs2 = 0;
       for (const file of files) {
-        const result = await parseLogFile(file, onRecord, grandTotalRecords2, onPerfTrace, onAppLog);
+        const result = await parseLogFile(file, onRecord, grandTotalRecords2, onPerfTrace, onAppLog, 0, (stub) => {
+          allStubs.push(stub);
+          if (onStub) onStub(stub);
+        });
         grandTotalLines2 += result.totalLines;
         grandTotalRecords2 += result.totalRecords;
         grandTotalPerfTraces2 += result.totalPerfTraces || 0;
@@ -1644,7 +1856,8 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
         totalLines: grandTotalLines2,
         totalRecords: grandTotalRecords2,
         totalPerfTraces: grandTotalPerfTraces2,
-        totalAppLogs: grandTotalAppLogs2
+        totalAppLogs: grandTotalAppLogs2,
+        traceStubs: allStubs
       };
     }
   }
@@ -1657,8 +1870,7 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
   const workerPromises = chunks.map((workerFiles) => {
     return new Promise((resolve, reject) => {
       if (workerFiles.length === 0) return resolve();
-      const workerScript2 = import_path4.default.resolve(__dirname, "worker.js");
-      const worker = new import_worker_threads.Worker(workerScript2, {
+      const worker = new import_worker_threads.Worker(workerScript, {
         workerData: { files: workerFiles, hasAppLogCallback: !!onAppLog }
       });
       let pendingBatchPromise = Promise.resolve();
@@ -1701,6 +1913,12 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
               }
             }
           });
+        } else if (msg.type === "trace_stubs") {
+          const stubs = msg.stubs;
+          stubs.forEach((s) => {
+            allStubs.push(s);
+            if (onStub) onStub(s);
+          });
         } else if (msg.type === "done") {
           pendingBatchPromise.then(() => {
             grandTotalLines += msg.totalLines;
@@ -1720,21 +1938,22 @@ async function parseLogs(targetPath, onRecord, onPerfTrace, onAppLog) {
     totalLines: grandTotalLines,
     totalRecords: grandTotalRecords,
     totalPerfTraces: grandTotalPerfTraces,
-    totalAppLogs: grandTotalAppLogs
+    totalAppLogs: grandTotalAppLogs,
+    traceStubs: allStubs
   };
 }
 
 // src/server/index.ts
 var import_http = __toESM(require("http"));
-var import_path6 = __toESM(require("path"));
-var import_fs6 = __toESM(require("fs"));
-var import_zlib2 = __toESM(require("zlib"));
+var import_path7 = __toESM(require("path"));
+var import_fs7 = __toESM(require("fs"));
+var import_zlib3 = __toESM(require("zlib"));
 var import_os5 = __toESM(require("os"));
 var import_child_process = require("child_process");
 
 // src/server/static.ts
-var import_fs5 = __toESM(require("fs"));
-var import_path5 = __toESM(require("path"));
+var import_fs6 = __toESM(require("fs"));
+var import_path6 = __toESM(require("path"));
 var MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -1749,19 +1968,19 @@ var MIME_TYPES = {
 function serveStatic(req, res, staticDir) {
   let reqPath = (req.url || "/").split("?")[0];
   if (reqPath === "/") reqPath = "/index.html";
-  const safePath = import_path5.default.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "");
-  const filePath = import_path5.default.join(staticDir, safePath);
-  if (import_fs5.default.existsSync(filePath) && import_fs5.default.statSync(filePath).isFile()) {
-    const ext = import_path5.default.extname(filePath).toLowerCase();
+  const safePath = import_path6.default.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "");
+  const filePath = import_path6.default.join(staticDir, safePath);
+  if (import_fs6.default.existsSync(filePath) && import_fs6.default.statSync(filePath).isFile()) {
+    const ext = import_path6.default.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
     res.writeHead(200, { "Content-Type": contentType });
-    import_fs5.default.createReadStream(filePath).pipe(res);
+    import_fs6.default.createReadStream(filePath).pipe(res);
     return true;
   }
-  const indexPath = import_path5.default.join(staticDir, "index.html");
-  if (import_fs5.default.existsSync(indexPath) && req.method === "GET" && !reqPath.startsWith("/api")) {
+  const indexPath = import_path6.default.join(staticDir, "index.html");
+  if (import_fs6.default.existsSync(indexPath) && req.method === "GET" && !reqPath.startsWith("/api")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    import_fs5.default.createReadStream(indexPath).pipe(res);
+    import_fs6.default.createReadStream(indexPath).pipe(res);
     return true;
   }
   return false;
@@ -1769,12 +1988,12 @@ function serveStatic(req, res, staticDir) {
 
 // src/server/index.ts
 function createServer(db, parseStats, port = 3e3) {
-  let staticDir = import_path6.default.resolve(process.cwd(), "dist/web");
-  if (!import_fs6.default.existsSync(staticDir)) {
-    staticDir = import_path6.default.resolve(__dirname, "../../dist/web");
+  let staticDir = import_path7.default.resolve(process.cwd(), "dist/web");
+  if (!import_fs7.default.existsSync(staticDir)) {
+    staticDir = import_path7.default.resolve(__dirname, "../../dist/web");
   }
-  if (!import_fs6.default.existsSync(staticDir)) {
-    staticDir = import_path6.default.resolve(__dirname, "../dist/web");
+  if (!import_fs7.default.existsSync(staticDir)) {
+    staticDir = import_path7.default.resolve(__dirname, "../dist/web");
   }
   const server = import_http.default.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1892,7 +2111,7 @@ function createServer(db, parseStats, port = 3e3) {
       }
       if (pathname === "/api/decompress-gz") {
         const gzPath = query.filePath || "";
-        if (!gzPath || !import_fs6.default.existsSync(gzPath)) {
+        if (!gzPath || !import_fs7.default.existsSync(gzPath)) {
           jsonResponse({ success: false, error: "\u6587\u4EF6\u4E0D\u5B58\u5728" }, 404);
           return;
         }
@@ -1900,14 +2119,14 @@ function createServer(db, parseStats, port = 3e3) {
           jsonResponse({ success: true, decompressedPath: gzPath });
           return;
         }
-        const tmpDir = import_path6.default.join(import_os5.default.tmpdir(), "parselog_decompressed");
-        if (!import_fs6.default.existsSync(tmpDir)) import_fs6.default.mkdirSync(tmpDir, { recursive: true });
-        const baseName = import_path6.default.basename(gzPath).replace(/\.gz$/, "");
-        const targetPath = import_path6.default.join(tmpDir, baseName);
-        if (!import_fs6.default.existsSync(targetPath)) {
-          const buffer = import_fs6.default.readFileSync(gzPath);
-          const decompressed = import_zlib2.default.gunzipSync(buffer);
-          import_fs6.default.writeFileSync(targetPath, decompressed);
+        const tmpDir = import_path7.default.join(import_os5.default.tmpdir(), "parselog_decompressed");
+        if (!import_fs7.default.existsSync(tmpDir)) import_fs7.default.mkdirSync(tmpDir, { recursive: true });
+        const baseName = import_path7.default.basename(gzPath).replace(/\.gz$/, "");
+        const targetPath = import_path7.default.join(tmpDir, baseName);
+        if (!import_fs7.default.existsSync(targetPath)) {
+          const buffer = import_fs7.default.readFileSync(gzPath);
+          const decompressed = import_zlib3.default.gunzipSync(buffer);
+          import_fs7.default.writeFileSync(targetPath, decompressed);
         }
         jsonResponse({ success: true, decompressedPath: targetPath });
         return;
@@ -1958,18 +2177,18 @@ async function main() {
   const args = process.argv.slice(2);
   let targetPath = "";
   if (args[0]) {
-    targetPath = import_path7.default.resolve(args[0]);
+    targetPath = import_path8.default.resolve(args[0]);
   } else {
     const cwd = process.cwd();
     let hasLocalLogs = false;
     try {
-      const files = import_fs7.default.readdirSync(cwd);
+      const files = import_fs8.default.readdirSync(cwd);
       hasLocalLogs = files.some((f) => f.endsWith(".log"));
     } catch (e) {
     }
     if (hasLocalLogs) {
       targetPath = cwd;
-    } else if (import_fs7.default.existsSync(DEFAULT_LOG_DIR)) {
+    } else if (import_fs8.default.existsSync(DEFAULT_LOG_DIR)) {
       targetPath = DEFAULT_LOG_DIR;
     } else {
       targetPath = cwd;
@@ -1984,8 +2203,6 @@ async function main() {
   const BATCH_SIZE = 1e4;
   let perfBatch = [];
   const PERF_BATCH_SIZE = 50;
-  let appLogBatch = [];
-  const APP_LOG_BATCH_SIZE = 5e3;
   const parseResult = await parseLogs(
     targetPath,
     (record) => {
@@ -2004,14 +2221,8 @@ async function main() {
         return db.insertPerfBatch(toInsert);
       }
     },
-    (appLog) => {
-      appLogBatch.push(appLog);
-      if (appLogBatch.length >= APP_LOG_BATCH_SIZE) {
-        const toInsert = appLogBatch;
-        appLogBatch = [];
-        return db.insertAppLogsBatch(toInsert);
-      }
-    }
+    null
+    // 启动时不全量加载 app_logs，改用存根按需惰性切片装载
   );
   if (batch.length > 0) {
     await db.insertBatch(batch);
@@ -2019,8 +2230,8 @@ async function main() {
   if (perfBatch.length > 0) {
     await db.insertPerfBatch(perfBatch);
   }
-  if (appLogBatch.length > 0) {
-    await db.insertAppLogsBatch(appLogBatch);
+  if (parseResult.traceStubs && parseResult.traceStubs.length > 0) {
+    db.registerTraceStubs(parseResult.traceStubs);
   }
   const costMs = Date.now() - startTime;
   parseResult.costMs = costMs;
@@ -2034,13 +2245,13 @@ async function main() {
   if (parseResult.totalPerfTraces > 0) {
     console.log(`\u2022 \u6027\u80FD\u5256\u6790\u6811 (ActionRecorder): ${parseResult.totalPerfTraces.toLocaleString()} \u7B14\u5B8C\u6574\u8BF7\u6C42`);
   }
-  if (parseResult.totalAppLogs > 0) {
-    console.log(`\u2022 \u5168\u91CF\u5E94\u7528\u65E5\u5FD7\u8BB0\u5F55: ${parseResult.totalAppLogs.toLocaleString()} \u6761`);
+  if (parseResult.traceStubs && parseResult.traceStubs.length > 0) {
+    console.log(`\u2022 \u7EAF\u51C0\u65E5\u5FD7\u7D22\u5F15 (\u8D77\u6B62\u884C\u5B58\u6839): ${parseResult.traceStubs.length.toLocaleString()} \u7B14 Trace (\u6309\u9700\u60F0\u6027\u79D2\u7EA7\u52A0\u8F7D)`);
   }
   createServer(db, parseResult, 3e3);
 }
 main().catch((err) => {
-  console.error("\u274C \u53D1\u751F\u5F02\u5E38\u9519\u8BEF:", err);
+  console.error("Fatal execution error:", err);
   process.exit(1);
 });
 // Annotate the CommonJS export names for ESM import in node:

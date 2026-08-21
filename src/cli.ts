@@ -4,7 +4,7 @@ import { SqlLogDatabase } from './db';
 import { parseLogs } from './parser';
 import { createServer } from './server';
 import { SqlRecord } from './types/sql';
-import { AppLogRecord } from './types/log';
+import { LogTraceStub } from './types/stub';
 
 const DEFAULT_LOG_DIR = `D:\\Users\\boke\\Desktop\\source\\bokeerp\\erp-backend\\logs`;
 
@@ -47,10 +47,7 @@ export async function main() {
   let perfBatch: { trace: any; actions: any[] }[] = [];
   const PERF_BATCH_SIZE = 50;
 
-  let appLogBatch: AppLogRecord[] = [];
-  const APP_LOG_BATCH_SIZE = 5000;
-
-  // 流式解析并批量装载至 DuckDB 内存引擎
+  // 流式解析并批量装载 SQL 与 性能树，应用日志仅记录轻量起止行存根
   const parseResult = await parseLogs(
     targetPath,
     record => {
@@ -69,14 +66,7 @@ export async function main() {
         return db.insertPerfBatch(toInsert);
       }
     },
-    appLog => {
-      appLogBatch.push(appLog);
-      if (appLogBatch.length >= APP_LOG_BATCH_SIZE) {
-        const toInsert = appLogBatch;
-        appLogBatch = [];
-        return db.insertAppLogsBatch(toInsert);
-      }
-    }
+    null // 启动时不全量加载 app_logs，改用存根按需惰性切片装载
   );
 
   if (batch.length > 0) {
@@ -85,8 +75,8 @@ export async function main() {
   if (perfBatch.length > 0) {
     await db.insertPerfBatch(perfBatch);
   }
-  if (appLogBatch.length > 0) {
-    await db.insertAppLogsBatch(appLogBatch);
+  if (parseResult.traceStubs && parseResult.traceStubs.length > 0) {
+    db.registerTraceStubs(parseResult.traceStubs);
   }
 
   const costMs = Date.now() - startTime;
@@ -101,8 +91,8 @@ export async function main() {
   if (parseResult.totalPerfTraces > 0) {
     console.log(`• 性能剖析树 (ActionRecorder): ${parseResult.totalPerfTraces.toLocaleString()} 笔完整请求`);
   }
-  if (parseResult.totalAppLogs > 0) {
-    console.log(`• 全量应用日志记录: ${parseResult.totalAppLogs.toLocaleString()} 条`);
+  if (parseResult.traceStubs && parseResult.traceStubs.length > 0) {
+    console.log(`• 纯净日志索引 (起止行存根): ${parseResult.traceStubs.length.toLocaleString()} 笔 Trace (按需惰性秒级加载)`);
   }
 
   // 启动 Web 控制台
@@ -110,6 +100,6 @@ export async function main() {
 }
 
 main().catch(err => {
-  console.error('❌ 发生异常错误:', err);
+  console.error('Fatal execution error:', err);
   process.exit(1);
 });

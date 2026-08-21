@@ -5,6 +5,7 @@ import { AppLogDao } from './appLogDao';
 import { SqlRecord, SqlSummary, DiagnosticsItem, TraceSummaryItem } from '../types/sql';
 import { PerfTraceRow, PerfTreeData } from '../types/perf';
 import { AppLogRecord } from '../types/log';
+import { LogTraceStub } from '../types/stub';
 
 export class SqlLogDatabase {
   private db: DbConnection;
@@ -73,13 +74,29 @@ export class SqlLogDatabase {
     return this.perfDao.getPerformanceTree(traceId);
   }
 
-  // AppLog 相关
+  // AppLog 相关与存根管理
+  public registerTraceStubs(stubs: LogTraceStub[]): void {
+    this.appLogDao.registerTraceStubs(stubs);
+  }
+
+  public getTraceStubs(): LogTraceStub[] {
+    return this.appLogDao.getTraceStubs();
+  }
+
+  public async ensureTraceLogsLoaded(traceId: string): Promise<void> {
+    return this.appLogDao.ensureTraceLogsLoaded(traceId);
+  }
+
   public async insertAppLogsBatch(records: AppLogRecord[]): Promise<void> {
     return this.appLogDao.insertAppLogsBatch(records);
   }
 
   public async getAppLogs(page = 1, pageSize = 50, filters = {}) {
     return this.appLogDao.getAppLogs(page, pageSize, filters);
+  }
+
+  public async getTraceSpans(traceId: string) {
+    return this.appLogDao.getTraceSpans(traceId);
   }
 
   public async close(): Promise<void> {
