@@ -135,12 +135,27 @@ export async function parseLogFile(
       if (currentAppLog.message) {
         currentAppLog.message = cleanSqlText(currentAppLog.message);
       }
-      totalAppLogs++;
-      currentAppLog.id = totalAppLogs;
-      if (onAppLog) {
-        const res = onAppLog(currentAppLog);
-        if (res && typeof res.then === 'function') {
-          await res;
+
+      // 智能精简策略：仅保留有业务 TraceID 的日志 或 ERROR/WARN/FATAL 异常日志
+      // 过滤掉无 TraceID 且为 INFO/DEBUG 的海量系统心跳与冗余噪音日志，防止海量日志爆内存
+      const isImportantLevel =
+        currentAppLog.level === 'ERROR' ||
+        currentAppLog.level === 'WARN' ||
+        currentAppLog.level === 'FATAL' ||
+        (currentAppLog.stack_trace && currentAppLog.stack_trace.length > 0);
+      const hasValidTrace =
+        Boolean(currentAppLog.trace_id) &&
+        currentAppLog.trace_id !== '-' &&
+        currentAppLog.trace_id !== '';
+
+      if (isImportantLevel || hasValidTrace) {
+        totalAppLogs++;
+        currentAppLog.id = totalAppLogs;
+        if (onAppLog) {
+          const res = onAppLog(currentAppLog);
+          if (res && typeof res.then === 'function') {
+            await res;
+          }
         }
       }
       currentAppLog = null;

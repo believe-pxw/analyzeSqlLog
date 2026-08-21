@@ -1276,12 +1276,16 @@ async function parseLogFile(filePath, onRecord, startRecordId = 0, onPerfTrace, 
       if (currentAppLog.message) {
         currentAppLog.message = cleanSqlText(currentAppLog.message);
       }
-      totalAppLogs++;
-      currentAppLog.id = totalAppLogs;
-      if (onAppLog) {
-        const res = onAppLog(currentAppLog);
-        if (res && typeof res.then === "function") {
-          await res;
+      const isImportantLevel = currentAppLog.level === "ERROR" || currentAppLog.level === "WARN" || currentAppLog.level === "FATAL" || currentAppLog.stack_trace && currentAppLog.stack_trace.length > 0;
+      const hasValidTrace = Boolean(currentAppLog.trace_id) && currentAppLog.trace_id !== "-" && currentAppLog.trace_id !== "";
+      if (isImportantLevel || hasValidTrace) {
+        totalAppLogs++;
+        currentAppLog.id = totalAppLogs;
+        if (onAppLog) {
+          const res = onAppLog(currentAppLog);
+          if (res && typeof res.then === "function") {
+            await res;
+          }
         }
       }
       currentAppLog = null;
