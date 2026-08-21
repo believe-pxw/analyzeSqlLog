@@ -78,7 +78,10 @@ CREATE TABLE IF NOT EXISTS app_logs (
     stack_trace VARCHAR,
     has_stack BOOLEAN,
     line_number INTEGER,
-    source_file VARCHAR
+    source_file VARCHAR,
+    is_sql BOOLEAN,
+    exec_time_ms DOUBLE,
+    result_rows INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sqllogs_trace_id ON sqllogs(trace_id);

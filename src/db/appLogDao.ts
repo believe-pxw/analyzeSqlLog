@@ -93,9 +93,12 @@ export class AppLogDao {
         logger_name: r.logger_name || '',
         message: r.message || '',
         stack_trace: r.stack_trace || '',
-        has_stack: Boolean(r.stack_trace && r.stack_trace.length > 0),
+        has_stack: Boolean(r.has_stack),
         line_number: r.line_number || 0,
-        source_file: r.source_file || ''
+        source_file: r.source_file || '',
+        is_sql: Boolean(r.is_sql),
+        exec_time_ms: r.exec_time_ms !== undefined ? r.exec_time_ms : null,
+        result_rows: r.result_rows !== undefined ? r.result_rows : null
       })).join('\n');
 
       await fs.promises.writeFile(tmpFile, jsonLines, 'utf-8');
@@ -104,12 +107,14 @@ export class AppLogDao {
         INSERT INTO app_logs (
           id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
           trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, stack_trace, has_stack, line_number, source_file
+          message, stack_trace, has_stack, line_number, source_file,
+          is_sql, exec_time_ms, result_rows
         )
         SELECT 
           id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
           trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, stack_trace, has_stack, line_number, source_file
+          message, stack_trace, has_stack, line_number, source_file,
+          is_sql, exec_time_ms, result_rows
         FROM read_json_auto('${normPath}', format='newline_delimited');
       `;
       await this.db.exec(sql);
@@ -123,25 +128,36 @@ export class AppLogDao {
     pageSize = 50,
     filters: { traceId?: string; spanId?: string; level?: string; serviceName?: string; loggerName?: string; keyword?: string } = {}
   ): Promise<{ data: any[]; total: number; spans: { span_id: string; parent_span_id: string; log_count: number }[]; hasPerfTree?: boolean }> {
-    // 触发按需惰性装载
+    // 触发按需惰性装载 (支持按 traceId 或按 spanId 自动索引定位)
     if (filters.traceId) {
       await this.ensureTraceLogsLoaded(filters.traceId);
+    } else if (filters.spanId) {
+      for (const stubs of this.stubsMap.values()) {
+        const found = stubs.find(s => s.spans && s.spans[filters.spanId!]);
+        if (found) {
+          await this.ensureTraceLogsLoaded(found.trace_id);
+        }
+      }
     }
 
     let whereClause = 'WHERE 1=1';
     const params: any[] = [];
 
     if (filters.traceId) {
-      whereClause += ' AND trace_id = ?';
-      params.push(filters.traceId);
+      whereClause += ' AND TRIM(trace_id) = ?';
+      params.push(filters.traceId.trim());
     }
     if (filters.spanId) {
-      whereClause += ' AND span_id = ?';
-      params.push(filters.spanId);
+      whereClause += ' AND TRIM(span_id) = ?';
+      params.push(filters.spanId.trim());
     }
-    if (filters.level && filters.level !== 'SQL') {
-      whereClause += ' AND level = ?';
-      params.push(filters.level.toUpperCase());
+    if (filters.level) {
+      if (filters.level === 'SQL') {
+        whereClause += ' AND is_sql = true';
+      } else {
+        whereClause += ' AND level = ?';
+        params.push(filters.level.toUpperCase());
+      }
     }
     if (filters.serviceName) {
       whereClause += ' AND service_name = ?';
@@ -156,71 +172,20 @@ export class AppLogDao {
       params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
     }
 
-    // 1. 查询常规应用日志
-    let appLogRows: any[] = [];
-    let totalAppLogs = 0;
+    const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
+    const countRes = await this.db.query<any>(countSql, params);
+    const total = Number(countRes[0]?.total || 0);
 
-    if (!filters.level || filters.level !== 'SQL') {
-      const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
-      const countRes = await this.db.query<any>(countSql, params);
-      totalAppLogs = Number(countRes[0]?.total || 0);
-
-      const listSql = `
-        SELECT * FROM app_logs
-        ${whereClause}
-        ORDER BY id ASC, log_time ASC
-      `;
-      appLogRows = await this.db.query<any>(listSql, params);
-    }
-
-    // 2. 如果指定了 TraceID，同时查出该 Trace 下的 SQL 记录进行归并
-    let sqlRows: any[] = [];
-    if (filters.traceId && (!filters.level || filters.level === 'SQL')) {
-      let sqlWhere = 'WHERE trace_id = ?';
-      const sqlParams: any[] = [filters.traceId];
-      if (filters.keyword) {
-        sqlWhere += ' AND (sql_template ILIKE ? OR full_sql ILIKE ?)';
-        sqlParams.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
-      }
-      const rawSqls = await this.db.query<any>(`SELECT * FROM sqllogs ${sqlWhere} ORDER BY log_time ASC, id ASC`, sqlParams);
-      sqlRows = rawSqls.map(r => ({
-        id: -r.id,
-        log_time: r.log_time,
-        nano_time: r.nano_time || '',
-        level: 'SQL',
-        service_name: r.db_manager ? r.db_manager.replace(/^.*dbmanager\./, '') : 'DB',
-        instance_name: '-',
-        ip_address: '-',
-        host_name: '-',
-        trace_id: r.trace_id,
-        span_id: r.span_id || '-',
-        parent_span_id: '-',
-        thread_name: r.thread_name || '-',
-        logger_name: r.db_manager || 'PreparedStatementWithLog',
-        message: r.full_sql || r.sql_template,
-        stack_trace: '',
-        has_stack: false,
-        line_number: r.line_number || 0,
-        source_file: r.source_file || '',
-        is_sql: true,
-        exec_time_ms: r.exec_time_ms,
-        result_rows: r.result_rows
-      }));
-    }
-
-    // 3. 归并两类日志流并按执行时间升序排序
-    const allCombined = [...appLogRows, ...sqlRows];
-    allCombined.sort((a, b) => {
-      const timeComp = (a.log_time || '').localeCompare(b.log_time || '');
-      if (timeComp !== 0) return timeComp;
-      return (a.id || 0) - (b.id || 0);
-    });
-
-    const total = allCombined.length;
     const offset = (page - 1) * pageSize;
-    const paginatedData = allCombined.slice(offset, offset + pageSize);
+    const listSql = `
+      SELECT * FROM app_logs
+      ${whereClause}
+      ORDER BY id ASC, log_time ASC
+      LIMIT ? OFFSET ?
+    `;
+    const rows = await this.db.query<any>(listSql, [...params, pageSize, offset]);
 
-    // 4. 计算 Span 列表
+    // 计算 Span 树与性能树标记
     let spans: any[] = [];
     let hasPerfTree = false;
 
@@ -234,13 +199,12 @@ export class AppLogDao {
       `;
       spans = await this.db.query<any>(spanSql, [filters.traceId]);
 
-      // 检测该 Trace 是否存在性能树 (ActionRecorder)
       const perfCheck = await this.db.query<any>('SELECT COUNT(*) as cnt FROM perf_traces WHERE trace_id = ?', [filters.traceId]);
       hasPerfTree = Number(perfCheck[0]?.cnt || 0) > 0;
     }
 
     return {
-      data: paginatedData,
+      data: rows,
       total,
       spans: spans.map(s => ({
         span_id: s.span_id,

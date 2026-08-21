@@ -6,14 +6,14 @@
         <input
           type="text"
           v-model="traceId"
-          @input="loadLogs(1)"
+          @input="onTraceInput"
           placeholder="输入 Trace ID 提取纯净日志流..."
           style="width: 240px;"
         />
       </div>
       <div class="input-group">
         <span>Span 跨度:</span>
-        <select v-model="spanId" @change="loadLogs(1)">
+        <select v-model="spanId" @change="selectSpan(spanId)">
           <option value="">全部 Span</option>
           <option v-for="s in spans" :key="s.span_id" :value="s.span_id">
             {{ s.span_id }} ({{ s.log_count }} 条)
@@ -21,10 +21,10 @@
         </select>
       </div>
       <div class="input-group">
-        <span>日志类型/级别:</span>
+        <span>日志级别:</span>
         <select v-model="level" @change="loadLogs(1)">
-          <option value="">全部类型 (ALL)</option>
-          <option value="SQL">🟢 仅 SQL 语句</option>
+          <option value="">全部级别 (ALL)</option>
+          <option value="SQL">🟢 包含 SQL 语句</option>
           <option value="ERROR">🔴 仅 ERROR (错误与异常)</option>
           <option value="WARN">🟠 仅 WARN (警告)</option>
           <option value="INFO">🔵 仅 INFO (信息)</option>
@@ -61,15 +61,15 @@
       <span style="font-weight: 600; color: #475569; margin-right: 6px;">🌐 链路 Span 树:</span>
       <span
         :class="['span-pill', { active: spanId === '' }]"
-        @click="spanId = ''; loadLogs(1)"
+        @click="selectSpan('')"
       >
-        全部 ({{ total }})
+        全部 Span ({{ totalSpanLogs }})
       </span>
       <span
         v-for="s in spans"
         :key="s.span_id"
         :class="['span-pill', { active: spanId === s.span_id }]"
-        @click="spanId = s.span_id; loadLogs(1)"
+        @click="selectSpan(s.span_id)"
       >
         {{ s.span_id }} <span class="span-count">{{ s.log_count }}</span>
       </span>
@@ -81,7 +81,8 @@
       :subtitle="traceId ? `Trace: ${traceId}` : '全量日志检索'"
       :totalCount="total"
     >
-      <span v-if="traceId" class="strip-metric">已识别 Span: <span class="strip-val">{{ spans.length }} 个</span></span>
+      <span v-if="spanId" class="strip-metric" style="color: #0284c7; font-weight: 600;">当前过滤 Span: {{ spanId }}</span>
+      <span v-if="traceId && spans.length > 0" class="strip-metric">已识别 Span: <span class="strip-val">{{ spans.length }} 个</span></span>
       <span v-if="hasPerfTree" class="strip-metric" style="color: #166534; font-weight: 600;">⚡ 包含性能分析树</span>
     </ContextSummaryStrip>
 
@@ -90,22 +91,26 @@
         <tr>
           <th class="col-nowrap" style="width: 35px;">#</th>
           <th class="col-time" style="width: 175px;">日志时刻 (NanoTime)</th>
-          <th class="col-nowrap" style="width: 65px;">类型</th>
+          <th class="col-nowrap" style="width: 65px;">级别</th>
           <th class="col-nowrap" style="width: 140px;">Span ID (跨度)</th>
           <th class="col-nowrap" style="width: 110px;">节点 & 线程</th>
           <th style="width: 200px;">类名 / dbManager</th>
-          <th>日志消息正文 & SQL 语句 & 异常堆栈</th>
+          <th>日志消息正文 & SQL 执行内容</th>
           <th class="col-nowrap" style="width: 110px;">源码定位</th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loading">
-          <td colspan="8" class="empty-cell">正在提取纯净日志与 SQL 执行流...</td>
+          <td colspan="8" class="empty-cell">正在提取纯净日志与执行流...</td>
         </tr>
         <tr v-else-if="logs.length === 0">
-          <td colspan="8" class="empty-cell">未检索到任何符合条件的日志或 SQL 记录</td>
+          <td colspan="8" class="empty-cell">未检索到任何符合条件的应用日志记录</td>
         </tr>
-        <tr v-for="(log, idx) in logs" :key="log.id || idx" :class="{ 'row-sql': log.is_sql }">
+        <tr
+          v-for="(log, idx) in logs"
+          :key="`${log.id || idx}_${log.line_number}_${log.nano_time}_${log.span_id}_${spanId}`"
+          :class="{ 'row-sql': isSqlLog(log) }"
+        >
           <td class="col-nowrap">{{ (page - 1) * pageSize + idx + 1 }}</td>
           <td class="col-time">
             <div>{{ log.log_time }}</div>
@@ -115,7 +120,14 @@
             <span :class="['level-badge', getLevelClass(log.level)]">{{ log.level }}</span>
           </td>
           <td class="col-nowrap">
-            <span v-if="log.span_id && log.span_id !== '-'" class="span-tag" @click="spanId = log.span_id; loadLogs(1)">{{ log.span_id }}</span>
+            <span
+              v-if="log.span_id && log.span_id !== '-'"
+              class="span-tag"
+              :title="`点击仅查看 ${log.span_id} 跨度日志`"
+              @click="selectSpan(log.span_id)"
+            >
+              {{ log.span_id }}
+            </span>
             <span v-else style="color: #94a3b8;">-</span>
           </td>
           <td class="col-nowrap">
@@ -126,21 +138,21 @@
             {{ log.logger_name }}
           </td>
           <td>
-            <!-- SQL 语句渲染 -->
-            <div v-if="log.is_sql || log.level === 'SQL'" class="sql-log-item">
-              <div class="sql-meta-header">
-                <CostBadge :costMs="log.exec_time_ms || 0" />
-                <span v-if="log.result_rows !== undefined" class="rows-tag">影响 {{ log.result_rows }} 行</span>
+            <!-- SQL 语句渲染：保留原本的 INFO 级别，并在正文中展示 SQL 代码框与耗时 -->
+            <div v-if="isSqlLog(log)" class="sql-log-item">
+              <div v-if="log.exec_time_ms !== undefined && log.exec_time_ms !== null" class="sql-meta-header">
+                <CostBadge :costMs="log.exec_time_ms" />
+                <span v-if="log.result_rows !== undefined && log.result_rows !== null" class="rows-tag">影响 {{ log.result_rows }} 行</span>
               </div>
               <SqlCodeBox :code="log.message" @toast="$emit('toast', $event)" />
             </div>
 
-            <!-- 普通日志正文 & 异常堆栈渲染 -->
+            <!-- 普通日志正文 & 真实异常堆栈渲染 -->
             <div v-else class="log-msg-text">
               <div>{{ log.message }}</div>
               <div v-if="log.has_stack && log.stack_trace" class="stack-box">
                 <div class="stack-toggle" @click="toggleStack(idx)">
-                  {{ expandedStacks[idx] ? '▼ 折叠堆栈' : '▶ 展开堆栈 (' + countStackLines(log.stack_trace) + ' 行)' }}
+                  {{ expandedStacks[idx] ? '▼ 折叠异常堆栈' : '▶ 展开异常堆栈 (' + countStackLines(log.stack_trace) + ' 行)' }}
                 </div>
                 <pre v-if="expandedStacks[idx]" class="stack-trace">{{ log.stack_trace }}</pre>
               </div>
@@ -164,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { api } from '../api';
 import ContextSummaryStrip from '../components/ContextSummaryStrip.vue';
 import Pagination from '../components/Pagination.vue';
@@ -191,6 +203,11 @@ const keyword = ref('');
 const loading = ref(false);
 const expandedStacks = ref<{ [key: number]: boolean }>({});
 
+const totalSpanLogs = computed(() => {
+  if (spans.value.length === 0) return total.value;
+  return spans.value.reduce((sum, s) => sum + (s.log_count || 0), 0);
+});
+
 async function loadLogs(p = 1) {
   page.value = p;
   loading.value = true;
@@ -206,7 +223,9 @@ async function loadLogs(p = 1) {
     if (res.success) {
       logs.value = res.data;
       total.value = res.total;
-      spans.value = res.spans || [];
+      if (res.spans && res.spans.length > 0) {
+        spans.value = res.spans;
+      }
       hasPerfTree.value = Boolean(res.hasPerfTree);
       emit('update-stats', { total: res.total }, `📜 纯净日志透视 (${traceId.value || '全量'})`);
     }
@@ -215,9 +234,42 @@ async function loadLogs(p = 1) {
   }
 }
 
+function onTraceInput() {
+  spanId.value = '';
+  spans.value = [];
+  loadLogs(1);
+}
+
+function selectSpan(sId: string) {
+  spanId.value = sId;
+  page.value = 1;
+  loadLogs(1);
+}
+
+function isSqlLog(log: any): boolean {
+  if (log.is_sql) return true;
+  const msg = (log.message || '').trim().toUpperCase();
+  const logger = (log.logger_name || '');
+  if (
+    logger.includes('PreparedStatementWithLog') ||
+    logger.includes('SQLLogUtils') ||
+    logger.includes('GeneralDBManager') ||
+    logger.includes('DBManager')
+  ) {
+    return true;
+  }
+  return (
+    msg.startsWith('SELECT ') ||
+    msg.startsWith('INSERT ') ||
+    msg.startsWith('UPDATE ') ||
+    msg.startsWith('DELETE ') ||
+    msg.startsWith('CREATE ') ||
+    msg.startsWith('ALTER ')
+  );
+}
+
 function getLevelClass(lvl: string) {
   const l = (lvl || '').toUpperCase();
-  if (l === 'SQL') return 'level-sql';
   if (l === 'ERROR') return 'level-error';
   if (l === 'WARN') return 'level-warn';
   if (l === 'INFO') return 'level-info';
@@ -367,11 +419,6 @@ defineExpose({
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
-}
-.level-sql {
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #a7f3d0;
 }
 .level-error {
   background: #fef2f2;

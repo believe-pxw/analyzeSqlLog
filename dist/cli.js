@@ -117,7 +117,10 @@ CREATE TABLE IF NOT EXISTS app_logs (
     stack_trace VARCHAR,
     has_stack BOOLEAN,
     line_number INTEGER,
-    source_file VARCHAR
+    source_file VARCHAR,
+    is_sql BOOLEAN,
+    exec_time_ms DOUBLE,
+    result_rows INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sqllogs_trace_id ON sqllogs(trace_id);
@@ -978,6 +981,7 @@ async function extractLogLines(sourceFile, startLine, endLine) {
     if (isLogHeader(rawLine)) {
       flushCurrent();
       const header = parseLogHeader(rawLine);
+      const isSqlHeader = header.loggerName.includes("PreparedStatementWithLog") || header.loggerName.includes("SQLLogUtils") || header.loggerName.includes("GeneralDBManager") || header.loggerName.includes("DBManager") || header.message && header.message.includes("SQL\u6267\u884C\u4FE1\u606F");
       currentRecord = {
         id: records.length + 1,
         log_time: header.logTime,
@@ -994,17 +998,47 @@ async function extractLogLines(sourceFile, startLine, endLine) {
         logger_name: header.loggerName,
         message: header.message,
         line_number: currentLine,
-        source_file: resolvedPath
+        source_file: resolvedPath,
+        is_sql: isSqlHeader
       };
     } else if (currentRecord) {
-      const cleaned = rawLine.startsWith(">") ? rawLine.substring(1) : rawLine;
-      if (!currentRecord.stack_trace) {
-        currentRecord.stack_trace = cleaned;
+      const trimmed = rawLine.trim();
+      const cleaned = rawLine.startsWith(">") ? rawLine.substring(1).trim() : trimmed;
+      if (currentRecord.is_sql) {
+        if (cleaned.startsWith("SQL\u8BED\u53E5:") || cleaned.startsWith("SQL:") || cleaned.startsWith("sql:")) {
+          const sql = cleaned.replace(/^SQL(语句)?:/i, "").trim();
+          currentRecord.message = sql;
+        } else if (cleaned.startsWith("\u8017\u65F6:") || cleaned.startsWith("\u6267\u884C\u65F6\u95F4:") || cleaned.startsWith("Time:")) {
+          const match = cleaned.match(/(\d+(\.\d+)?)\s*ms/i);
+          if (match) {
+            currentRecord.exec_time_ms = parseFloat(match[1]);
+          }
+        } else if (cleaned.startsWith("\u5F71\u54CD\u884C\u6570:") || cleaned.startsWith("\u7ED3\u679C\u96C6:") || cleaned.startsWith("Rows:")) {
+          const match = cleaned.match(/(\d+)/);
+          if (match) {
+            currentRecord.result_rows = parseInt(match[1], 10);
+          }
+        } else if (!currentRecord.message || currentRecord.message === "SQL\u6267\u884C\u4FE1\u606F:") {
+          currentRecord.message = cleaned;
+        } else if (currentRecord.message && !cleaned.startsWith("\u53C2\u6570:")) {
+          currentRecord.message += "\n" + cleaned;
+        }
       } else {
-        currentRecord.stack_trace += "\n" + cleaned;
-      }
-      if (currentRecord.message) {
-        currentRecord.message += "\n" + cleaned;
+        const isStackTrace = currentRecord.level === "ERROR" || currentRecord.level === "FATAL" || cleaned.startsWith("at ") || cleaned.startsWith("Caused by:") || cleaned.includes("Exception") || cleaned.includes("Error");
+        if (isStackTrace) {
+          if (!currentRecord.stack_trace) {
+            currentRecord.stack_trace = cleaned;
+          } else {
+            currentRecord.stack_trace += "\n" + cleaned;
+          }
+          currentRecord.has_stack = true;
+        } else {
+          if (currentRecord.message) {
+            currentRecord.message += "\n" + cleaned;
+          } else {
+            currentRecord.message = cleaned;
+          }
+        }
       }
     }
   }
@@ -1089,9 +1123,12 @@ var AppLogDao = class {
         logger_name: r.logger_name || "",
         message: r.message || "",
         stack_trace: r.stack_trace || "",
-        has_stack: Boolean(r.stack_trace && r.stack_trace.length > 0),
+        has_stack: Boolean(r.has_stack),
         line_number: r.line_number || 0,
-        source_file: r.source_file || ""
+        source_file: r.source_file || "",
+        is_sql: Boolean(r.is_sql),
+        exec_time_ms: r.exec_time_ms !== void 0 ? r.exec_time_ms : null,
+        result_rows: r.result_rows !== void 0 ? r.result_rows : null
       })).join("\n");
       await import_fs4.default.promises.writeFile(tmpFile, jsonLines, "utf-8");
       const normPath = tmpFile.replace(/\\/g, "/");
@@ -1099,12 +1136,14 @@ var AppLogDao = class {
         INSERT INTO app_logs (
           id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
           trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, stack_trace, has_stack, line_number, source_file
+          message, stack_trace, has_stack, line_number, source_file,
+          is_sql, exec_time_ms, result_rows
         )
         SELECT 
           id, log_time, nano_time, level, service_name, instance_name, ip_address, host_name,
           trace_id, span_id, parent_span_id, thread_name, logger_name,
-          message, stack_trace, has_stack, line_number, source_file
+          message, stack_trace, has_stack, line_number, source_file,
+          is_sql, exec_time_ms, result_rows
         FROM read_json_auto('${normPath}', format='newline_delimited');
       `;
       await this.db.exec(sql);
@@ -1116,20 +1155,31 @@ var AppLogDao = class {
   async getAppLogs(page = 1, pageSize = 50, filters = {}) {
     if (filters.traceId) {
       await this.ensureTraceLogsLoaded(filters.traceId);
+    } else if (filters.spanId) {
+      for (const stubs of this.stubsMap.values()) {
+        const found = stubs.find((s) => s.spans && s.spans[filters.spanId]);
+        if (found) {
+          await this.ensureTraceLogsLoaded(found.trace_id);
+        }
+      }
     }
     let whereClause = "WHERE 1=1";
     const params = [];
     if (filters.traceId) {
-      whereClause += " AND trace_id = ?";
-      params.push(filters.traceId);
+      whereClause += " AND TRIM(trace_id) = ?";
+      params.push(filters.traceId.trim());
     }
     if (filters.spanId) {
-      whereClause += " AND span_id = ?";
-      params.push(filters.spanId);
+      whereClause += " AND TRIM(span_id) = ?";
+      params.push(filters.spanId.trim());
     }
-    if (filters.level && filters.level !== "SQL") {
-      whereClause += " AND level = ?";
-      params.push(filters.level.toUpperCase());
+    if (filters.level) {
+      if (filters.level === "SQL") {
+        whereClause += " AND is_sql = true";
+      } else {
+        whereClause += " AND level = ?";
+        params.push(filters.level.toUpperCase());
+      }
     }
     if (filters.serviceName) {
       whereClause += " AND service_name = ?";
@@ -1143,61 +1193,17 @@ var AppLogDao = class {
       whereClause += " AND (message ILIKE ? OR logger_name ILIKE ?)";
       params.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
     }
-    let appLogRows = [];
-    let totalAppLogs = 0;
-    if (!filters.level || filters.level !== "SQL") {
-      const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
-      const countRes = await this.db.query(countSql, params);
-      totalAppLogs = Number(countRes[0]?.total || 0);
-      const listSql = `
-        SELECT * FROM app_logs
-        ${whereClause}
-        ORDER BY id ASC, log_time ASC
-      `;
-      appLogRows = await this.db.query(listSql, params);
-    }
-    let sqlRows = [];
-    if (filters.traceId && (!filters.level || filters.level === "SQL")) {
-      let sqlWhere = "WHERE trace_id = ?";
-      const sqlParams = [filters.traceId];
-      if (filters.keyword) {
-        sqlWhere += " AND (sql_template ILIKE ? OR full_sql ILIKE ?)";
-        sqlParams.push(`%${filters.keyword}%`, `%${filters.keyword}%`);
-      }
-      const rawSqls = await this.db.query(`SELECT * FROM sqllogs ${sqlWhere} ORDER BY log_time ASC, id ASC`, sqlParams);
-      sqlRows = rawSqls.map((r) => ({
-        id: -r.id,
-        log_time: r.log_time,
-        nano_time: r.nano_time || "",
-        level: "SQL",
-        service_name: r.db_manager ? r.db_manager.replace(/^.*dbmanager\./, "") : "DB",
-        instance_name: "-",
-        ip_address: "-",
-        host_name: "-",
-        trace_id: r.trace_id,
-        span_id: r.span_id || "-",
-        parent_span_id: "-",
-        thread_name: r.thread_name || "-",
-        logger_name: r.db_manager || "PreparedStatementWithLog",
-        message: r.full_sql || r.sql_template,
-        stack_trace: "",
-        has_stack: false,
-        line_number: r.line_number || 0,
-        source_file: r.source_file || "",
-        is_sql: true,
-        exec_time_ms: r.exec_time_ms,
-        result_rows: r.result_rows
-      }));
-    }
-    const allCombined = [...appLogRows, ...sqlRows];
-    allCombined.sort((a, b) => {
-      const timeComp = (a.log_time || "").localeCompare(b.log_time || "");
-      if (timeComp !== 0) return timeComp;
-      return (a.id || 0) - (b.id || 0);
-    });
-    const total = allCombined.length;
+    const countSql = `SELECT COUNT(*) as total FROM app_logs ${whereClause}`;
+    const countRes = await this.db.query(countSql, params);
+    const total = Number(countRes[0]?.total || 0);
     const offset = (page - 1) * pageSize;
-    const paginatedData = allCombined.slice(offset, offset + pageSize);
+    const listSql = `
+      SELECT * FROM app_logs
+      ${whereClause}
+      ORDER BY id ASC, log_time ASC
+      LIMIT ? OFFSET ?
+    `;
+    const rows = await this.db.query(listSql, [...params, pageSize, offset]);
     let spans = [];
     let hasPerfTree = false;
     if (filters.traceId) {
@@ -1213,7 +1219,7 @@ var AppLogDao = class {
       hasPerfTree = Number(perfCheck[0]?.cnt || 0) > 0;
     }
     return {
-      data: paginatedData,
+      data: rows,
       total,
       spans: spans.map((s) => ({
         span_id: s.span_id,

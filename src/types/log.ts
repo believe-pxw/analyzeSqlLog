@@ -35,9 +35,11 @@ export interface AppLogRecord {
   parent_span_id: string;
   thread_name: string;
   logger_name: string;
-  message: string;
-  has_stack: boolean;
-  stack_trace: string;
+  has_stack?: boolean;
+  stack_trace?: string;
   source_file: string;
   line_number: number;
+  is_sql?: boolean;
+  exec_time_ms?: number;
+  result_rows?: number;
 }
