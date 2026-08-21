@@ -1,12 +1,11 @@
 <template>
   <div
-    :class="['sql-code-box', { expanded: isExpanded, 'has-more': isLong }]"
+    :class="['sql-code-box', { expanded: isExpanded }]"
     @click="toggleExpand"
     @contextmenu.prevent="handleContextMenuCopy"
     :title="hoverTitle"
   >
-    <div class="sql-content">{{ codeText }}</div>
-    <div v-if="!isExpanded && isLong" class="expand-hint">▼ 点击展开全部 (右键复制)</div>
+    {{ codeText }}
   </div>
 </template>
 
@@ -27,10 +26,6 @@ const emit = defineEmits<{
 const isExpanded = ref(props.defaultExpanded);
 
 const codeText = computed(() => props.code || '');
-const isLong = computed(() => {
-  if (!props.code) return false;
-  return props.code.length > 70 || props.code.includes('\n');
-});
 
 const hoverTitle = computed(() => {
   if (isExpanded.value) return '左键点击折叠 | 右键复制完整 SQL';
@@ -59,37 +54,33 @@ function handleContextMenuCopy() {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 4px;
-  padding: 4px 6px;
-  max-height: 40px;
-  overflow: hidden;
-  word-break: break-all;
-  white-space: pre-wrap;
+  padding: 3px 6px;
   cursor: pointer;
   user-select: text;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: all 0.15s ease;
+  
+  /* 默认折叠：最多展示 2 行，超出平滑截断 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
+
 .sql-code-box:hover {
   border-color: #94a3b8;
   background: #f1f5f9;
 }
+
+/* 展开状态：无高度限制，完整呈现换行与格式 */
 .sql-code-box.expanded {
-  max-height: none !important;
+  display: block;
   overflow: visible;
+  max-height: none !important;
+  -webkit-line-clamp: unset;
   background: #ffffff;
   border-color: #0284c7;
-}
-.sql-content {
-  pointer-events: auto;
-}
-.expand-hint {
-  font-size: 10px;
-  color: #0284c7;
-  font-weight: 600;
-  margin-top: 2px;
-  text-align: right;
-  opacity: 0.85;
-}
-.sql-code-box:hover .expand-hint {
-  opacity: 1;
+  white-space: pre-wrap;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.1);
 }
 </style>
