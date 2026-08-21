@@ -175,7 +175,7 @@ export class SqlDao {
       max_time_ms: Math.round(Number(r.max_time_ms)),
       min_time_ms: Math.round(Number(r.min_time_ms)),
       trace_count: Number(r.trace_count),
-      example_sql: compressSqlColumns(r.example_sql || r.sql_template),
+      example_sql: r.example_sql || r.sql_template,
       example_trace_id: r.example_trace_id,
       example_source_file: r.example_source_file,
       example_line_number: Number(r.example_line_number)
@@ -231,7 +231,7 @@ export class SqlDao {
     const rows = await this.db.query<any>(listSql, [...params, pageSize, offset]);
     const data: SqlRecord[] = rows.map(r => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
 
     return {
@@ -300,7 +300,7 @@ export class SqlDao {
       total_time_ms: Math.round(Number(r.total_time_ms)),
       avg_time_ms: Math.round(Number(r.avg_time_ms) * 100) / 100,
       max_time_ms: Math.round(Number(r.max_time_ms)),
-      example_sql: compressSqlColumns(r.example_sql || r.sql_template),
+      example_sql: r.example_sql || r.sql_template,
       example_source_file: r.example_source_file,
       example_line_number: Number(r.example_line_number),
       advice: Number(r.repeat_count) >= 20 ? '🔥 严重循环: 强烈建议改用批量 IN 查询或加缓存' : '⚠️ 重复执行: 建议评估循环调用'
@@ -391,7 +391,7 @@ export class SqlDao {
     const rows = await this.db.query<any>(listSql, [traceId, pageSize, offset]);
     const data: SqlRecord[] = rows.map(r => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
 
     return {
@@ -434,7 +434,7 @@ export class SqlDao {
     const rows = await this.db.query<any>(listSql, [...params, pageSize, offset]);
     const data: SqlRecord[] = rows.map(r => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
 
     return {

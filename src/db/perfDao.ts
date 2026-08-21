@@ -140,7 +140,7 @@ export class PerfDao {
       const sqlDetails: any[] = [];
       if (a.sql_text) {
         sqlDetails.push({
-          sql: compressSqlColumns(a.sql_text),
+          sql: a.sql_text,
           costMs: a.time_ms,
           time: '',
           sourceFile: a.source_file,

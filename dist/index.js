@@ -1124,7 +1124,7 @@ var SqlDao = class {
       max_time_ms: Math.round(Number(r.max_time_ms)),
       min_time_ms: Math.round(Number(r.min_time_ms)),
       trace_count: Number(r.trace_count),
-      example_sql: compressSqlColumns(r.example_sql || r.sql_template),
+      example_sql: r.example_sql || r.sql_template,
       example_trace_id: r.example_trace_id,
       example_source_file: r.example_source_file,
       example_line_number: Number(r.example_line_number)
@@ -1174,7 +1174,7 @@ var SqlDao = class {
     const rows = await this.db.query(listSql, [...params, pageSize, offset]);
     const data = rows.map((r) => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
     return {
       data,
@@ -1236,7 +1236,7 @@ var SqlDao = class {
       total_time_ms: Math.round(Number(r.total_time_ms)),
       avg_time_ms: Math.round(Number(r.avg_time_ms) * 100) / 100,
       max_time_ms: Math.round(Number(r.max_time_ms)),
-      example_sql: compressSqlColumns(r.example_sql || r.sql_template),
+      example_sql: r.example_sql || r.sql_template,
       example_source_file: r.example_source_file,
       example_line_number: Number(r.example_line_number),
       advice: Number(r.repeat_count) >= 20 ? "\u{1F525} \u4E25\u91CD\u5FAA\u73AF: \u5F3A\u70C8\u5EFA\u8BAE\u6539\u7528\u6279\u91CF IN \u67E5\u8BE2\u6216\u52A0\u7F13\u5B58" : "\u26A0\uFE0F \u91CD\u590D\u6267\u884C: \u5EFA\u8BAE\u8BC4\u4F30\u5FAA\u73AF\u8C03\u7528"
@@ -1318,7 +1318,7 @@ var SqlDao = class {
     const rows = await this.db.query(listSql, [traceId, pageSize, offset]);
     const data = rows.map((r) => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
     return {
       data,
@@ -1357,7 +1357,7 @@ var SqlDao = class {
     const rows = await this.db.query(listSql, [...params, pageSize, offset]);
     const data = rows.map((r) => ({
       ...r,
-      full_sql: compressSqlColumns(r.full_sql || r.sql_template)
+      full_sql: r.full_sql || r.sql_template
     }));
     return {
       data,
@@ -1502,7 +1502,7 @@ var PerfDao = class {
       const sqlDetails = [];
       if (a.sql_text) {
         sqlDetails.push({
-          sql: compressSqlColumns(a.sql_text),
+          sql: a.sql_text,
           costMs: a.time_ms,
           time: "",
           sourceFile: a.source_file,

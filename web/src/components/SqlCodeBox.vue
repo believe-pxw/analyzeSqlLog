@@ -4,13 +4,15 @@
     @click="toggleExpand"
     @contextmenu.prevent="handleContextMenuCopy"
     :title="hoverTitle"
+    data-test="sql-code-box"
   >
-    {{ codeText }}
+    {{ displayText }}
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { compressSqlColumns } from '../utils/sql';
 
 const props = withDefaults(defineProps<{
   code: string;
@@ -25,7 +27,14 @@ const emit = defineEmits<{
 
 const isExpanded = ref(props.defaultExpanded);
 
-const codeText = computed(() => props.code || '');
+const briefCode = computed(() => compressSqlColumns(props.code || ''));
+
+const displayText = computed(() => {
+  if (isExpanded.value) {
+    return props.code || '';
+  }
+  return briefCode.value;
+});
 
 const hoverTitle = computed(() => {
   if (isExpanded.value) return '左键点击折叠 | 右键复制完整 SQL';
@@ -38,7 +47,9 @@ function toggleExpand() {
 
 function handleContextMenuCopy() {
   if (props.code) {
-    navigator.clipboard.writeText(props.code);
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(props.code);
+    }
     emit('toast', '已复制完整 SQL 语句至剪贴板');
   }
 }
