@@ -4,8 +4,7 @@
   "description": "极速全链路日志与性能分析器 (parselog CLI)",
   "main": "dist/index.js",
   "bin": {
-    "parselog": "./bin/parselog.js",
-    "sqllog": "./bin/parselog.js"
+    "parselog": "./bin/parselog.js"
   },
   "files": [
     "bin",
